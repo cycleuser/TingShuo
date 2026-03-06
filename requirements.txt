@@ -1,0 +1,16 @@
+# TingShuo - Python Dependencies
+#
+# Core: No hard dependencies (uses Python stdlib only).
+# Install optional packages for the STT engine(s) and features you need.
+
+# STT Engines (install at least one):
+faster-whisper>=1.0.0      # Recommended: fast, GPU/CPU, CTranslate2-based
+# vosk>=0.3.45             # Lightweight offline recognition
+# openai-whisper>=20231117 # OpenAI's original Whisper
+# pywhispercpp>=1.0.0      # whisper.cpp Python binding
+
+# NLP Polishing:
+nltk>=3.8                  # Sentence segmentation for subtitle polishing
+
+# Note: LLM polishing uses urllib (stdlib) - no extra packages needed.
+# Note: ffmpeg must be installed separately (not a Python package).
