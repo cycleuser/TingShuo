@@ -30,7 +30,7 @@ NLP sentence segmentation (nltk). Provides both CLI and GUI interfaces.
 # §2  Version & Metadata
 # ═══════════════════════════════════════════════════════════════════════════════
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "TingShuo Team"
 __license__ = "GPL-3.0-or-later"
 
@@ -238,7 +238,7 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "input_dir": "Input Directory:", "output_dir": "Output Directory:",
         "browse": "Browse", "save_same_dir": "Save to same directory as source files",
         "engine_settings": "Engine Settings", "engine": "Engine:", "model": "Model:",
-        "download": "Download", "download_all": "Download All", "language": "Language:",
+        "download": "Download", "download_all": "All (Engine)", "download_everything": "All Models", "language": "Language:",
         "lang_hint": "(select or type code)", "use_hf_mirror": "Use HF Mirror:",
         "output_format": "Output Format", "subtitle_polishing": "Subtitle Polishing",
         "none_opt": "None", "llm_opt": "LLM", "nlp_opt": "NLP (nltk)",
@@ -276,7 +276,7 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "input_dir": "输入目录：", "output_dir": "输出目录：",
         "browse": "浏览", "save_same_dir": "保存到与源文件相同的目录",
         "engine_settings": "引擎设置", "engine": "引擎：", "model": "模型：",
-        "download": "下载", "download_all": "全部下载", "language": "语言：",
+        "download": "下载", "download_all": "引擎全部", "download_everything": "所有模型", "language": "语言：",
         "lang_hint": "（选择或输入语言代码）", "use_hf_mirror": "使用 HF 镜像：",
         "output_format": "输出格式", "subtitle_polishing": "字幕优化",
         "none_opt": "无", "llm_opt": "LLM", "nlp_opt": "NLP (nltk)",
@@ -314,7 +314,7 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "input_dir": "入力ディレクトリ：", "output_dir": "出力ディレクトリ：",
         "browse": "参照", "save_same_dir": "ソースファイルと同じディレクトリに保存",
         "engine_settings": "エンジン設定", "engine": "エンジン：", "model": "モデル：",
-        "download": "ダウンロード", "download_all": "全てダウンロード", "language": "言語：",
+        "download": "ダウンロード", "download_all": "エンジン全部", "download_everything": "全モデル", "language": "言語：",
         "lang_hint": "（選択または入力）", "use_hf_mirror": "HFミラー使用：",
         "output_format": "出力形式", "subtitle_polishing": "字幕最適化",
         "none_opt": "なし", "llm_opt": "LLM", "nlp_opt": "NLP (nltk)",
@@ -352,7 +352,7 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "input_dir": "입력 디렉토리:", "output_dir": "출력 디렉토리:",
         "browse": "찾아보기", "save_same_dir": "소스 파일과 같은 디렉토리에 저장",
         "engine_settings": "엔진 설정", "engine": "엔진:", "model": "모델:",
-        "download": "다운로드", "download_all": "모두 다운로드", "language": "언어:",
+        "download": "다운로드", "download_all": "엔진 전부", "download_everything": "전체 모델", "language": "언어:",
         "lang_hint": "(선택 또는 입력)", "use_hf_mirror": "HF 미러 사용:",
         "output_format": "출력 형식", "subtitle_polishing": "자막 최적화",
         "none_opt": "없음", "llm_opt": "LLM", "nlp_opt": "NLP (nltk)",
@@ -390,7 +390,7 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "input_dir": "Répertoire d'entrée :", "output_dir": "Répertoire de sortie :",
         "browse": "Parcourir", "save_same_dir": "Enregistrer dans le même répertoire",
         "engine_settings": "Paramètres moteur", "engine": "Moteur :", "model": "Modèle :",
-        "download": "Télécharger", "download_all": "Tout télécharger", "language": "Langue :",
+        "download": "Télécharger", "download_all": "Tout (moteur)", "download_everything": "Tous les modèles", "language": "Langue :",
         "lang_hint": "(sélectionner ou saisir)", "use_hf_mirror": "Miroir HF :",
         "output_format": "Format de sortie", "subtitle_polishing": "Polissage des sous-titres",
         "none_opt": "Aucun", "llm_opt": "LLM", "nlp_opt": "NLP (nltk)",
@@ -428,7 +428,7 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "input_dir": "Eingabeverzeichnis:", "output_dir": "Ausgabeverzeichnis:",
         "browse": "Durchsuchen", "save_same_dir": "Im selben Verzeichnis speichern",
         "engine_settings": "Engine-Einstellungen", "engine": "Engine:", "model": "Modell:",
-        "download": "Herunterladen", "download_all": "Alle herunterladen", "language": "Sprache:",
+        "download": "Herunterladen", "download_all": "Alle (Engine)", "download_everything": "Alle Modelle", "language": "Sprache:",
         "lang_hint": "(auswählen oder eingeben)", "use_hf_mirror": "HF-Mirror:",
         "output_format": "Ausgabeformat", "subtitle_polishing": "Untertitel-Optimierung",
         "none_opt": "Keine", "llm_opt": "LLM", "nlp_opt": "NLP (nltk)",
@@ -466,7 +466,7 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "input_dir": "Directorio de entrada:", "output_dir": "Directorio de salida:",
         "browse": "Examinar", "save_same_dir": "Guardar en el mismo directorio",
         "engine_settings": "Configuración del motor", "engine": "Motor:", "model": "Modelo:",
-        "download": "Descargar", "download_all": "Descargar todo", "language": "Idioma:",
+        "download": "Descargar", "download_all": "Todo (motor)", "download_everything": "Todos modelos", "language": "Idioma:",
         "lang_hint": "(seleccionar o escribir)", "use_hf_mirror": "Espejo HF:",
         "output_format": "Formato de salida", "subtitle_polishing": "Optimización de subtítulos",
         "none_opt": "Ninguno", "llm_opt": "LLM", "nlp_opt": "NLP (nltk)",
@@ -504,7 +504,7 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "input_dir": "Directory di input:", "output_dir": "Directory di output:",
         "browse": "Sfoglia", "save_same_dir": "Salva nella stessa directory",
         "engine_settings": "Impostazioni motore", "engine": "Motore:", "model": "Modello:",
-        "download": "Scarica", "download_all": "Scarica tutto", "language": "Lingua:",
+        "download": "Scarica", "download_all": "Tutto (motore)", "download_everything": "Tutti modelli", "language": "Lingua:",
         "lang_hint": "(seleziona o digita)", "use_hf_mirror": "Mirror HF:",
         "output_format": "Formato di output", "subtitle_polishing": "Ottimizzazione sottotitoli",
         "none_opt": "Nessuno", "llm_opt": "LLM", "nlp_opt": "NLP (nltk)",
@@ -542,7 +542,7 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "input_dir": "Diretório de entrada:", "output_dir": "Diretório de saída:",
         "browse": "Procurar", "save_same_dir": "Salvar no mesmo diretório",
         "engine_settings": "Configurações do mecanismo", "engine": "Mecanismo:", "model": "Modelo:",
-        "download": "Baixar", "download_all": "Baixar tudo", "language": "Idioma:",
+        "download": "Baixar", "download_all": "Tudo (motor)", "download_everything": "Todos modelos", "language": "Idioma:",
         "lang_hint": "(selecionar ou digitar)", "use_hf_mirror": "Espelho HF:",
         "output_format": "Formato de saída", "subtitle_polishing": "Otimização de legendas",
         "none_opt": "Nenhum", "llm_opt": "LLM", "nlp_opt": "NLP (nltk)",
@@ -580,7 +580,7 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "input_dir": "Входная директория:", "output_dir": "Выходная директория:",
         "browse": "Обзор", "save_same_dir": "Сохранять в ту же директорию",
         "engine_settings": "Настройки движка", "engine": "Движок:", "model": "Модель:",
-        "download": "Скачать", "download_all": "Скачать все", "language": "Язык:",
+        "download": "Скачать", "download_all": "Все (движок)", "download_everything": "Все модели", "language": "Язык:",
         "lang_hint": "(выберите или введите)", "use_hf_mirror": "Зеркало HF:",
         "output_format": "Формат вывода", "subtitle_polishing": "Обработка субтитров",
         "none_opt": "Нет", "llm_opt": "LLM", "nlp_opt": "NLP (nltk)",
@@ -970,6 +970,27 @@ def download_all_models(
             if progress_cb:
                 progress_cb(f"FAILED: {engine_name}/{model_name}: {e}")
     return success, len(models)
+
+
+def download_everything(
+    hf_mirror: str = "",
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> Tuple[int, int]:
+    """Download all known models for all engines. Returns (success, total)."""
+    total_success = 0
+    total_count = 0
+    for engine_name in SUPPORTED_ENGINES:
+        models = ENGINE_MODELS.get(engine_name, [])
+        total_count += len(models)
+        for model_name in models:
+            try:
+                download_model(engine_name, model_name, hf_mirror=hf_mirror, progress_cb=progress_cb)
+                total_success += 1
+            except Exception as e:
+                logger.error("Failed to download %s/%s: %s", engine_name, model_name, e)
+                if progress_cb:
+                    progress_cb(f"FAILED: {engine_name}/{model_name}: {e}")
+    return total_success, total_count
 
 
 # ─── Settings Persistence ────────────────────────────────────────────────────
@@ -2235,6 +2256,8 @@ def launch_gui() -> None:
             self.dl_btn.grid(row=0, column=4, sticky=tk.W, padx=2)
             self.dl_all_btn = ttk.Button(eng_frame, text=tr("download_all"), command=self._download_all_models)
             self.dl_all_btn.grid(row=0, column=5, sticky=tk.W, padx=2)
+            self.dl_everything_btn = ttk.Button(eng_frame, text=tr("download_everything"), command=self._download_everything)
+            self.dl_everything_btn.grid(row=0, column=6, sticky=tk.W, padx=2)
 
             ttk.Label(eng_frame, text=tr("language")).grid(row=1, column=0, sticky=tk.W, pady=(4, 0))
             self.lang_var = tk.StringVar(value="auto")
@@ -2458,6 +2481,7 @@ def launch_gui() -> None:
                         self.progress_var.set(100 if ok else 0)
                         self.dl_btn.config(state="normal")
                         self.dl_all_btn.config(state="normal")
+                        self.dl_everything_btn.config(state="normal")
                         self.start_btn.config(state="normal")
                         label = tr("download_complete") if ok else tr("download_failed")
                         self.progress_label.config(text=f"{label} {name}")
@@ -2468,6 +2492,19 @@ def launch_gui() -> None:
                         self.progress_var.set(100 if success == total else 50)
                         self.dl_btn.config(state="normal")
                         self.dl_all_btn.config(state="normal")
+                        self.dl_everything_btn.config(state="normal")
+                        self.start_btn.config(state="normal")
+                        self.progress_label.config(
+                            text=f"{tr('download_complete')} {success}/{total}"
+                        )
+                    elif msg_type == "download_everything_done":
+                        success, total = data
+                        self.progress_bar.stop()
+                        self.progress_bar.config(mode="determinate")
+                        self.progress_var.set(100 if success == total else 50)
+                        self.dl_btn.config(state="normal")
+                        self.dl_all_btn.config(state="normal")
+                        self.dl_everything_btn.config(state="normal")
                         self.start_btn.config(state="normal")
                         self.progress_label.config(
                             text=f"{tr('download_complete')} {success}/{total}"
@@ -2601,6 +2638,7 @@ def launch_gui() -> None:
             hf_mirror = self.hf_url_var.get().strip() if self.hf_mirror_var.get() else ""
             self.dl_btn.config(state="disabled")
             self.dl_all_btn.config(state="disabled")
+            self.dl_everything_btn.config(state="disabled")
             self.start_btn.config(state="disabled")
             self.progress_bar.config(mode="indeterminate")
             self.progress_bar.start()
@@ -2629,6 +2667,7 @@ def launch_gui() -> None:
             hf_mirror = self.hf_url_var.get().strip() if self.hf_mirror_var.get() else ""
             self.dl_btn.config(state="disabled")
             self.dl_all_btn.config(state="disabled")
+            self.dl_everything_btn.config(state="disabled")
             self.start_btn.config(state="disabled")
             self.progress_bar.config(mode="indeterminate")
             self.progress_bar.start()
@@ -2646,6 +2685,31 @@ def launch_gui() -> None:
                 except Exception as e:
                     logger.error("Download all failed: %s", e)
                     self.msg_queue.put(("download_all_done", (0, 0)))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def _download_everything(self) -> None:
+            hf_mirror = self.hf_url_var.get().strip() if self.hf_mirror_var.get() else ""
+            self.dl_btn.config(state="disabled")
+            self.dl_all_btn.config(state="disabled")
+            self.dl_everything_btn.config(state="disabled")
+            self.start_btn.config(state="disabled")
+            self.progress_bar.config(mode="indeterminate")
+            self.progress_bar.start()
+            self.progress_label.config(text=f"{tr('downloading')} {tr('download_everything')} ...")
+
+            def worker() -> None:
+                def progress_cb(msg: str) -> None:
+                    self.msg_queue.put(("log", f"[INFO] {msg}"))
+
+                try:
+                    success, total = download_everything(
+                        hf_mirror=hf_mirror, progress_cb=progress_cb,
+                    )
+                    self.msg_queue.put(("download_everything_done", (success, total)))
+                except Exception as e:
+                    logger.error("Download everything failed: %s", e)
+                    self.msg_queue.put(("download_everything_done", (0, 0)))
 
             threading.Thread(target=worker, daemon=True).start()
 
