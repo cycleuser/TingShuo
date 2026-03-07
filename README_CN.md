@@ -1,13 +1,16 @@
 # TingShuo 听说
 
-**使用多种语音识别引擎从音频/视频文件生成 SRT/LRC 字幕，支持 LLM 润色。**
+**使用多种语音识别引擎从音频/视频文件生成 SRT/LRC 字幕和 Markdown 讲稿，支持自动纠错、LLM 润色和多模态内容总结。**
 
-TingShuo 可以递归扫描目录中的所有媒体文件，使用您选择的语音识别引擎进行转录，并输出 SRT 或 LRC 格式的字幕文件。还可以通过 LLM（Ollama 或 OpenAI 兼容 API）或 NLP 句子分割（nltk）对字幕进行润色，生成自然、完整的句子。
+TingShuo 可以递归扫描目录中的所有媒体文件，使用您选择的语音识别引擎进行转录，并输出 SRT、LRC 或 Markdown 讲稿格式的文件。功能包括基于 LLM 的自动纠错（错别字和口误）、字幕润色（LLM 或 NLP）以及带多模态视频分析的内容总结。
 
 ## 功能特点
 
 - **4 种语音引擎**：faster-whisper、Vosk、OpenAI Whisper、whisper.cpp
-- **2 种输出格式**：SRT（字幕）和 LRC（歌词）
+- **3 种输出格式**：SRT（字幕）、LRC（歌词）和 MD（Markdown 讲稿）
+- **Markdown 讲稿**：从演讲、讲座等生成结构清晰的讲稿文档
+- **自动纠错**：通过 LLM 自动修复错别字、口误等转录错误
+- **内容总结**：对音频/视频内容进行总结，视频支持多模态分析（关键帧提取 + 视觉 LLM）
 - **字幕翻译**：使用 NLLB 或 LLM 将字幕翻译为多种目标语言
 - **多语言界面**：支持中文、英文、日文、韩文、法文、德文、西班牙文、意大利文、葡萄牙文、俄文
 - **LLM 润色**：通过 Ollama 或 OpenAI 兼容 API 将碎片化字幕合并为自然句子
@@ -84,6 +87,31 @@ tingshuo -i ./media --polish-llm --api-url https://api.example.com --api-key sk-
 tingshuo -i ./media --polish-nlp -l zh
 ```
 
+**生成 Markdown 讲稿（讲座/演讲）：**
+```bash
+tingshuo -i ./lectures -f md --polish-llm --ollama-model qwen2.5
+```
+
+**自动纠正错别字和口误：**
+```bash
+tingshuo -i ./media --auto-correct --ollama-model qwen2.5
+```
+
+**自动纠错 + LLM 润色组合使用：**
+```bash
+tingshuo -i ./media --auto-correct --polish-llm --ollama-model qwen2.5
+```
+
+**生成内容总结：**
+```bash
+tingshuo -i ./media --summarize --ollama-model qwen2.5
+```
+
+**多模态视频总结（OpenAI 兼容 API）：**
+```bash
+tingshuo -i ./videos --summarize --api-url https://api.example.com --api-key sk-xxx --api-model gpt-4o-mini
+```
+
 **指定语言和模型：**
 ```bash
 tingshuo -i ./videos -e faster-whisper -m large-v3 -l zh
@@ -132,7 +160,9 @@ tingshuo --gui
 - 引擎和模型选择下拉框
 - **语言下拉选择框**，包含常用语言（自动检测、zh、en、ja、ko 等），也可手动输入语言代码
 - **模型下载按钮**（下载 / 全部下载），带进度反馈
-- 格式切换（SRT/LRC）
+- 格式切换（SRT/LRC/MD）
+- **自动纠错复选框**：启用 LLM 自动纠错转录错误
+- **内容总结复选框**：生成总结文件，可设置关键帧间隔
 - 润色选项（无 / LLM / NLP），含配置面板
 - **翻译面板**：启用翻译、选择目标语言、选择翻译后端（NLLB 或 LLM）
 - **Ollama 模型下拉框**，带刷新按钮，可从服务器查询已安装模型
@@ -145,14 +175,16 @@ tingshuo --gui
 ## 命令行参数说明
 
 ```
-用法: tingshuo [-h] [--version] [--gui] [-i DIR] [-o DIR] [-f {srt,lrc}]
+用法: tingshuo [-h] [--version] [--gui] [-i DIR] [-o DIR] [-f {srt,lrc,md}]
                [--no-recursive] [-e ENGINE] [-m NAME] [-l CODE]
                [--hf-mirror URL] [--download] [--download-all]
-               [--list-ollama-models] [--polish-llm | --polish-nlp]
+               [--list-ollama-models] [--auto-correct]
+               [--polish-llm | --polish-nlp]
                [--ollama-url URL] [--ollama-model NAME] [--api-url URL]
                [--api-key KEY] [--api-model NAME] [-v]
                [--translate] [--target-lang CODES]
                [--trans-backend {nllb,llm}] [--nllb-model NAME]
+               [--summarize] [--keyframe-interval SECONDS]
 ```
 
 ### 输入/输出
@@ -161,7 +193,7 @@ tingshuo --gui
 |------|------|
 | `-i`, `--input DIR` | 输入目录，包含音频/视频文件（必需） |
 | `-o`, `--output DIR` | 输出目录（默认：与源文件相同目录） |
-| `-f`, `--format {srt,lrc}` | 字幕格式（默认：srt） |
+| `-f`, `--format {srt,lrc,md}` | 输出格式：srt、lrc 或 md（Markdown 讲稿）（默认：srt） |
 | `--no-recursive` | 不递归扫描子目录 |
 
 ### 语音引擎
@@ -192,6 +224,17 @@ tingshuo --gui
 |------|------|
 | `--polish-llm` | 使用 LLM 润色（Ollama 或 OpenAI 兼容 API） |
 | `--polish-nlp` | 使用 NLP 句子分割润色（nltk） |
+
+### 自动纠错
+
+| 参数 | 说明 |
+|------|------|
+| `--auto-correct` | 使用 LLM 自动纠正错别字、口误等转录错误 |
+
+### LLM 设置
+
+| 参数 | 说明 |
+|------|------|
 | `--ollama-url URL` | Ollama API 地址（默认：http://localhost:11434） |
 | `--ollama-model NAME` | Ollama 模型名称（默认：qwen2.5） |
 | `--api-url URL` | OpenAI 兼容 API 基础地址 |
@@ -214,6 +257,13 @@ tingshuo --gui
 | `--target-lang CODES` | 逗号分隔的目标语言代码，例如 `zh,en,ja` |
 | `--trans-backend {nllb,llm}` | 翻译后端：`nllb`（Helsinki-NLP/NLLB）或 `llm`（默认：nllb） |
 | `--nllb-model NAME` | NLLB 模型名称（默认：facebook/nllb-200-distilled-600M） |
+
+### 内容总结
+
+| 参数 | 说明 |
+|------|------|
+| `--summarize` | 生成内容总结文件（.summary.md） |
+| `--keyframe-interval SECONDS` | 视频总结的关键帧提取间隔（秒）（默认：60） |
 
 ## 支持的格式
 
@@ -239,10 +289,21 @@ tingshuo --gui
 **LRC**（歌词格式）：
 ```
 [ti:文件名]
-[re:TingShuo v0.1.0]
+[re:TingShuo v0.1.3]
 
 [00:01.50]这是第一行字幕。
 [00:05.00]这是第二行字幕。
+```
+
+**MD**（Markdown 讲稿格式）：
+```markdown
+## 引言
+
+这是演讲的开头部分，LLM 将内容组织成自然的段落。
+
+## 主要内容
+
+演讲者接下来讨论了主要议题，关键要点被整理为可读的段落。
 ```
 
 ## 语音识别引擎
@@ -321,6 +382,77 @@ tingshuo -i ./media --polish-nlp -l zh
 ```
 
 英文等语言使用 nltk 内置分句器；中文/日文/韩文使用标点符号进行句子分割（`。！？`等）。
+
+## Markdown 讲稿生成
+
+TingShuo 可以从演讲、讲座和报告中生成结构清晰的 Markdown 讲稿。与带时间戳的字幕不同，MD 格式输出的是按主题组织的流畅文本。
+
+```bash
+# 生成 Markdown 讲稿（使用 LLM 组织段落）
+tingshuo -i ./lectures -f md --polish-llm --ollama-model qwen2.5
+
+# 配合自动纠错获得更干净的输出
+tingshuo -i ./lectures -f md --auto-correct --polish-llm --ollama-model qwen2.5
+```
+
+LLM 会将原始转录内容组织成带 Markdown 标题和段落的逻辑结构。如果未配置 LLM，则使用简单的段落分组作为后备方案。
+
+## 自动纠错
+
+TingShuo 可以在润色或输出之前自动修复转录错误，包括：
+
+- **错别字**：语音识别引擎常见的错误识别
+- **口误**：说话时的口误和失言
+- **语气词**：去除"嗯"、"那个"、"um"、"uh"等无意义的语气词
+
+```bash
+# 仅自动纠错
+tingshuo -i ./media --auto-correct --ollama-model qwen2.5
+
+# 自动纠错 + LLM 润色（先纠错再润色）
+tingshuo -i ./media --auto-correct --polish-llm --ollama-model qwen2.5
+
+# 使用 OpenAI 兼容 API 进行自动纠错
+tingshuo -i ./media --auto-correct --api-url https://api.example.com --api-key sk-xxx --api-model gpt-4o-mini
+```
+
+自动纠错保留片段边界（时间戳不变），适用于所有输出格式（SRT、LRC、MD）。
+
+## 内容总结
+
+TingShuo 可以在正常输出之外额外生成内容总结文件（`.summary.md`）。对于视频文件，支持通过关键帧提取和视觉 LLM 进行多模态分析。
+
+### 纯文本总结（音频或视频）
+
+```bash
+# 使用 Ollama 总结
+tingshuo -i ./media --summarize --ollama-model qwen2.5
+
+# 使用 OpenAI 兼容 API 总结
+tingshuo -i ./media --summarize --api-url https://api.example.com --api-key sk-xxx --api-model gpt-4o-mini
+```
+
+### 多模态视频总结
+
+对于视频文件，TingShuo 使用 ffmpeg 提取关键帧，并将其与转录文本一起发送给支持视觉的 LLM 进行综合分析：
+
+```bash
+# 多模态总结，提取关键帧（默认间隔 60 秒）
+tingshuo -i ./videos --summarize --api-url https://api.example.com --api-key sk-xxx --api-model gpt-4o-mini
+
+# 自定义关键帧间隔（每 30 秒）
+tingshuo -i ./videos --summarize --keyframe-interval 30 --api-url https://api.example.com --api-key sk-xxx --api-model gpt-4o-mini
+
+# 使用 Ollama 多模态模型（如 llava、llama3.2-vision）
+tingshuo -i ./videos --summarize --ollama-model llava
+```
+
+多模态总结整合了：
+- 转录文本中的语音内容
+- 视觉元素：幻灯片、图表、图示、演示等
+- 补充语音内容的关键视觉信息
+
+如果 LLM 不支持视觉功能，TingShuo 会自动回退到纯文本总结。
 
 ## 字幕翻译
 
