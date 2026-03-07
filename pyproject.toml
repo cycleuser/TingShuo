@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64,<75"]
+requires = ["setuptools>=77.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,7 @@ name = "tingshuo"
 dynamic = ["version"]
 description = "Generate SRT/LRC subtitles from audio/video files using multiple STT engines with optional LLM polishing"
 readme = "README.md"
-license = {text = "GPL-3.0-or-later"}
+license = "GPL-3.0-or-later"
 requires-python = ">=3.9"
 authors = [
     {name = "TingShuo Team", email = "wedonotuse@outlook.com"},
@@ -18,7 +18,6 @@ classifiers = [
     "Environment :: Console",
     "Environment :: X11 Applications",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",

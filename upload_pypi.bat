@@ -1,43 +1,34 @@
 @echo off
-REM Upload TingShuo to PyPI
-REM Prerequisites: pip install build twine
+REM TingShuo - Build and upload to PyPI
+setlocal
+cd /d "%~dp0"
+
+set "PYTHON=C:\Miniconda3\envs\dev\python.exe"
+set "VERSION_FILE=tingshuo.py"
 
 echo === TingShuo PyPI Upload ===
 
-REM Clean previous builds
-echo Cleaning old build artifacts ...
+echo [1/5] Bumping patch version...
+%PYTHON% -c "import re,sys;p='%VERSION_FILE%'.replace('\\','/');t=open(p,encoding='utf-8').read();m=re.search(r'(__version__\s*=\s*\"(\d+\.\d+\.)(\d+)\")',t);old=m.group(2)+m.group(3);new=m.group(2)+str(int(m.group(3))+1);open(p,'w',encoding='utf-8').write(t.replace(m.group(1),'__version__ = \"'+new+'\"'));print(f'  {old} -> {new}')"
+if %errorlevel% neq 0 (echo Version bump failed! & exit /b 1)
+
+echo [2/5] Cleaning old builds...
 if exist dist rmdir /s /q dist
 if exist build rmdir /s /q build
-for /d %%d in (*.egg-info) do rmdir /s /q "%%d"
+for /d %%i in (*.egg-info) do rmdir /s /q "%%i"
 
-REM Build
-echo Building package ...
-python -m build
-if errorlevel 1 (
-    echo Build failed!
-    pause
-    exit /b 1
-)
+echo [3/5] Installing build tools...
+%PYTHON% -m pip install --upgrade build twine -q
 
-REM Check
-echo Checking package ...
-python -m twine check dist\*
-if errorlevel 1 (
-    echo Package check failed!
-    pause
-    exit /b 1
-)
+echo [4/5] Building package...
+%PYTHON% -m build
+if %errorlevel% neq 0 (echo Build failed! & exit /b 1)
+%PYTHON% -m twine check dist\*
+if %errorlevel% neq 0 (echo Check failed! & exit /b 1)
 
-REM Upload
-echo Uploading to PyPI ...
-python -m twine upload dist\*
-if errorlevel 1 (
-    echo Upload failed!
-    pause
-    exit /b 1
-)
+echo [5/5] Uploading to PyPI...
+%PYTHON% -m twine upload dist\*
+if %errorlevel% neq 0 (echo Upload failed! & exit /b 1)
 
-echo.
-echo === Upload complete! ===
-echo Install with: pip install tingshuo
-pause
+echo === Done! ===
+endlocal
