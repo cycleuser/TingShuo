@@ -1,26 +1,37 @@
-#!/bin/bash
-# Upload TingShuo to PyPI
-# Prerequisites: pip install build twine
+#!/usr/bin/env bash
+# TingShuo - Build and upload to PyPI
 set -e
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+PYTHON="C:/Miniconda3/envs/dev/python.exe"
+VERSION_FILE="tingshuo.py"
 
 echo "=== TingShuo PyPI Upload ==="
 
-# Clean previous builds
-echo "Cleaning old build artifacts ..."
+echo "[1/5] Bumping patch version..."
+"$PYTHON" -c "
+import re, sys
+p = '$VERSION_FILE'
+t = open(p,encoding='utf-8').read()
+m = re.search(r'(__version__\s*=\s*\"(\d+\.\d+\.)(\d+)\")', t)
+if not m: print('ERROR: cannot parse version'); sys.exit(1)
+old_v = m.group(2) + m.group(3)
+new_v = m.group(2) + str(int(m.group(3)) + 1)
+open(p,'w',encoding='utf-8').write(t.replace(m.group(1), '__version__ = \"' + new_v + '\"'))
+print(f'  {old_v} -> {new_v}')
+"
+
+echo "[2/5] Cleaning old builds..."
 rm -rf dist/ build/ *.egg-info
 
-# Build
-echo "Building package ..."
-python -m build
+echo "[3/5] Installing build tools..."
+"$PYTHON" -m pip install --upgrade build twine -q
 
-# Check
-echo "Checking package ..."
-python -m twine check dist/*
+echo "[4/5] Building package..."
+"$PYTHON" -m build
+"$PYTHON" -m twine check dist/*
 
-# Upload
-echo "Uploading to PyPI ..."
-python -m twine upload dist/*
+echo "[5/5] Uploading to PyPI..."
+"$PYTHON" -m twine upload dist/*
 
-echo ""
-echo "=== Upload complete! ==="
-echo "Install with: pip install tingshuo"
+echo "=== Done! ==="
