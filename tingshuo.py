@@ -19,18 +19,20 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """
-TingShuo (听说) - Generate SRT/LRC subtitles from audio/video files.
+TingShuo (听说) - Generate SRT/LRC subtitles and Markdown transcripts from audio/video files.
 
 Supports multiple speech-to-text engines (faster-whisper, Vosk, OpenAI Whisper,
 whisper.cpp) with optional LLM polishing (Ollama / OpenAI-compatible API) and
-NLP sentence segmentation (nltk). Provides both CLI and GUI interfaces.
+NLP sentence segmentation (nltk). Features include auto-correction of typos and
+verbal mistakes, Markdown transcript generation for speeches/lectures, and content
+summarization with multimodal video analysis. Provides both CLI and GUI interfaces.
 """
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # §2  Version & Metadata
 # ═══════════════════════════════════════════════════════════════════════════════
 
-__version__ = "0.1.2"
+__version__ = "0.1.4"
 __author__ = "TingShuo Team"
 __license__ = "GPL-3.0-or-later"
 
@@ -50,6 +52,7 @@ import tempfile
 import threading
 import subprocess
 import zipfile
+import base64
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -186,6 +189,69 @@ Rules:
 6. Return ONLY the JSON array, no other text.
 """
 
+LLM_AUTOCORRECT_PROMPT = """\
+You are a transcription error-correction assistant. You receive a JSON array of \
+subtitle segments, each with "s" (start time in seconds), "e" (end time in \
+seconds), and "t" (text). Your task is to fix errors in the text while keeping \
+everything else unchanged.
+
+Rules:
+1. Fix typos, wrong characters (错别字), and obvious verbal mistakes (口误).
+2. Fix homophones and misheard words based on context.
+3. Remove filler words (um, uh, 嗯, 那个, etc.) only when they add no meaning.
+4. Do NOT merge, split, or reorder segments. Keep the EXACT same number of segments.
+5. Preserve "s" and "e" values EXACTLY as given.
+6. Preserve the original meaning. Do not rephrase, summarize, or add content.
+7. Return a JSON array in the exact same format: [{"s": ..., "e": ..., "t": ...}, ...]
+8. Return ONLY the JSON array, no other text.
+"""
+
+LLM_TRANSCRIPT_PROMPT = """\
+You are a transcript formatting assistant. You receive raw transcription text \
+from a speech, lecture, or presentation. Your task is to organize it into a \
+clean, readable Markdown document.
+
+Rules:
+1. Organize the text into logical paragraphs based on topic flow.
+2. Add Markdown section headers (## or ###) where major topic shifts occur.
+3. Remove filler words, false starts, and verbal hesitations.
+4. Fix obvious errors and improve readability while preserving ALL original meaning.
+5. Do NOT add content that was not in the original speech.
+6. Do NOT add a title or metadata header — start directly with the content.
+7. Return ONLY the formatted Markdown text, no explanations.
+"""
+
+LLM_SUMMARIZE_PROMPT = """\
+You are a content summarization assistant. You receive a transcript of an audio \
+or video recording. Your task is to produce a structured Markdown summary.
+
+Rules:
+1. Start with a brief overview (2-3 sentences).
+2. List the main topics discussed as a bulleted list.
+3. Provide key points and details for each topic.
+4. End with conclusions or action items if applicable.
+5. Use Markdown formatting (headers, bullets, bold for emphasis).
+6. Be concise but comprehensive — capture all important information.
+7. Return ONLY the Markdown summary, no explanations.
+"""
+
+LLM_SUMMARIZE_MULTIMODAL_PROMPT = """\
+You are a multimodal content analysis assistant. You receive a transcript of a \
+video recording along with keyframe images extracted from the video. Your task \
+is to produce a comprehensive Markdown summary that integrates both spoken \
+content and visual information.
+
+Rules:
+1. Start with a brief overview of the video content (2-3 sentences).
+2. Describe the visual elements: slides, diagrams, charts, demonstrations, etc.
+3. List the main topics discussed as a bulleted list.
+4. For each topic, integrate both what was said and what was shown visually.
+5. Note important visual information that complements or extends the spoken content.
+6. End with conclusions or key takeaways.
+7. Use Markdown formatting (headers, bullets, bold for emphasis).
+8. Return ONLY the Markdown summary, no explanations.
+"""
+
 # ─── NLLB Language Codes (ISO 639-1 → NLLB) ─────────────────────────────────
 
 NLLB_LANG_MAP: Dict[str, str] = {
@@ -270,6 +336,13 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "translating": "Translating...", "trans_complete": "Translation complete",
         "trans_settings": "Translation Settings",
         "restart_note": "Restart the application for language changes to take effect.",
+        "auto_correct": "Auto-Correct", "auto_correcting": "Auto-correcting...",
+        "auto_correct_complete": "Auto-correction complete",
+        "summarize": "Content Summary", "summarizing": "Summarizing...",
+        "summarize_complete": "Summary generated",
+        "transcript_opt": "MD (Transcript)",
+        "multimodal_note": "Video summarization uses visual analysis (requires vision-capable API)",
+        "keyframe_interval": "Keyframe Interval (s):",
     },
     "zh": {
         "app_title": "听说", "input_output": "输入 / 输出",
@@ -308,6 +381,13 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "translating": "翻译中...", "trans_complete": "翻译完成",
         "trans_settings": "翻译设置",
         "restart_note": "语言更改需要重启应用程序才能生效。",
+        "auto_correct": "自动纠错", "auto_correcting": "自动纠错中...",
+        "auto_correct_complete": "自动纠错完成",
+        "summarize": "内容总结", "summarizing": "总结中...",
+        "summarize_complete": "总结生成完成",
+        "transcript_opt": "MD（讲稿）",
+        "multimodal_note": "视频总结使用视觉分析（需要支持视觉的API）",
+        "keyframe_interval": "关键帧间隔（秒）：",
     },
     "ja": {
         "app_title": "TingShuo", "input_output": "入出力",
@@ -346,6 +426,13 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "translating": "翻訳中...", "trans_complete": "翻訳完了",
         "trans_settings": "翻訳設定",
         "restart_note": "言語の変更はアプリの再起動後に反映されます。",
+        "auto_correct": "自動校正", "auto_correcting": "自動校正中...",
+        "auto_correct_complete": "自動校正完了",
+        "summarize": "コンテンツ要約", "summarizing": "要約中...",
+        "summarize_complete": "要約生成完了",
+        "transcript_opt": "MD（原稿）",
+        "multimodal_note": "動画要約はビジュアル分析を使用（ビジョン対応APIが必要）",
+        "keyframe_interval": "キーフレーム間隔（秒）：",
     },
     "ko": {
         "app_title": "TingShuo", "input_output": "입출력",
@@ -384,6 +471,13 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "translating": "번역 중...", "trans_complete": "번역 완료",
         "trans_settings": "번역 설정",
         "restart_note": "언어 변경은 앱을 다시 시작해야 적용됩니다.",
+        "auto_correct": "자동 교정", "auto_correcting": "자동 교정 중...",
+        "auto_correct_complete": "자동 교정 완료",
+        "summarize": "콘텐츠 요약", "summarizing": "요약 중...",
+        "summarize_complete": "요약 생성 완료",
+        "transcript_opt": "MD (원고)",
+        "multimodal_note": "비디오 요약은 시각 분석 사용 (비전 API 필요)",
+        "keyframe_interval": "키프레임 간격 (초):",
     },
     "fr": {
         "app_title": "TingShuo", "input_output": "Entrée / Sortie",
@@ -422,6 +516,13 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "translating": "Traduction en cours...", "trans_complete": "Traduction terminée",
         "trans_settings": "Paramètres de traduction",
         "restart_note": "Redémarrez l'application pour appliquer le changement de langue.",
+        "auto_correct": "Auto-correction", "auto_correcting": "Auto-correction en cours...",
+        "auto_correct_complete": "Auto-correction terminée",
+        "summarize": "Résumé du contenu", "summarizing": "Résumé en cours...",
+        "summarize_complete": "Résumé généré",
+        "transcript_opt": "MD (Transcription)",
+        "multimodal_note": "Le résumé vidéo utilise l'analyse visuelle (API vision requise)",
+        "keyframe_interval": "Intervalle d'images clés (s) :",
     },
     "de": {
         "app_title": "TingShuo", "input_output": "Eingabe / Ausgabe",
@@ -460,6 +561,13 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "translating": "Übersetzen...", "trans_complete": "Übersetzung abgeschlossen",
         "trans_settings": "Übersetzungseinstellungen",
         "restart_note": "Starten Sie die Anwendung neu, um Sprachänderungen zu übernehmen.",
+        "auto_correct": "Autokorrektur", "auto_correcting": "Autokorrektur läuft...",
+        "auto_correct_complete": "Autokorrektur abgeschlossen",
+        "summarize": "Inhaltszusammenfassung", "summarizing": "Zusammenfassung wird erstellt...",
+        "summarize_complete": "Zusammenfassung erstellt",
+        "transcript_opt": "MD (Transkript)",
+        "multimodal_note": "Videozusammenfassung nutzt visuelle Analyse (Vision-API erforderlich)",
+        "keyframe_interval": "Keyframe-Intervall (s):",
     },
     "es": {
         "app_title": "TingShuo", "input_output": "Entrada / Salida",
@@ -498,6 +606,13 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "translating": "Traduciendo...", "trans_complete": "Traducción completa",
         "trans_settings": "Configuración de traducción",
         "restart_note": "Reinicie la aplicación para aplicar el cambio de idioma.",
+        "auto_correct": "Autocorrección", "auto_correcting": "Autocorrigiendo...",
+        "auto_correct_complete": "Autocorrección completada",
+        "summarize": "Resumen de contenido", "summarizing": "Resumiendo...",
+        "summarize_complete": "Resumen generado",
+        "transcript_opt": "MD (Transcripción)",
+        "multimodal_note": "El resumen de video usa análisis visual (requiere API de visión)",
+        "keyframe_interval": "Intervalo de fotogramas clave (s):",
     },
     "it": {
         "app_title": "TingShuo", "input_output": "Input / Output",
@@ -536,6 +651,13 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "translating": "Traduzione in corso...", "trans_complete": "Traduzione completata",
         "trans_settings": "Impostazioni traduzione",
         "restart_note": "Riavviare l'applicazione per applicare il cambio di lingua.",
+        "auto_correct": "Autocorrezione", "auto_correcting": "Autocorrezione in corso...",
+        "auto_correct_complete": "Autocorrezione completata",
+        "summarize": "Riepilogo contenuto", "summarizing": "Riepilogo in corso...",
+        "summarize_complete": "Riepilogo generato",
+        "transcript_opt": "MD (Trascrizione)",
+        "multimodal_note": "Il riepilogo video usa l'analisi visiva (richiede API vision)",
+        "keyframe_interval": "Intervallo fotogrammi chiave (s):",
     },
     "pt": {
         "app_title": "TingShuo", "input_output": "Entrada / Saída",
@@ -574,6 +696,13 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "translating": "Traduzindo...", "trans_complete": "Tradução concluída",
         "trans_settings": "Configurações de tradução",
         "restart_note": "Reinicie o aplicativo para aplicar a alteração de idioma.",
+        "auto_correct": "Autocorreção", "auto_correcting": "Autocorrigindo...",
+        "auto_correct_complete": "Autocorreção concluída",
+        "summarize": "Resumo de conteúdo", "summarizing": "Resumindo...",
+        "summarize_complete": "Resumo gerado",
+        "transcript_opt": "MD (Transcrição)",
+        "multimodal_note": "O resumo de vídeo usa análise visual (requer API de visão)",
+        "keyframe_interval": "Intervalo de quadros-chave (s):",
     },
     "ru": {
         "app_title": "TingShuo", "input_output": "Вход / Выход",
@@ -612,6 +741,13 @@ UI_STRINGS: Dict[str, Dict[str, str]] = {
         "translating": "Перевод...", "trans_complete": "Перевод завершён",
         "trans_settings": "Настройки перевода",
         "restart_note": "Перезапустите приложение для применения изменений языка.",
+        "auto_correct": "Автокоррекция", "auto_correcting": "Автокоррекция...",
+        "auto_correct_complete": "Автокоррекция завершена",
+        "summarize": "Резюме содержания", "summarizing": "Создание резюме...",
+        "summarize_complete": "Резюме создано",
+        "transcript_opt": "MD (Стенограмма)",
+        "multimodal_note": "Резюме видео использует визуальный анализ (требуется API с поддержкой изображений)",
+        "keyframe_interval": "Интервал ключевых кадров (с):",
     },
 }
 
@@ -676,6 +812,12 @@ class TranslationConfig:
 
 
 @dataclass
+class SummarizeConfig:
+    enabled: bool = False
+    keyframe_interval: int = 60  # seconds between extracted keyframes
+
+
+@dataclass
 class JobConfig:
     input_dir: str = ""
     output_dir: str = ""
@@ -687,6 +829,8 @@ class JobConfig:
     polish: PolishConfig = field(default_factory=PolishConfig)
     translation: TranslationConfig = field(default_factory=TranslationConfig)
     recursive: bool = True
+    auto_correct: bool = False
+    summarize: SummarizeConfig = field(default_factory=SummarizeConfig)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -744,6 +888,49 @@ def extract_audio(media_path: Path, temp_dir: str) -> Path:
             f"ffmpeg failed for {media_path.name}:\n{result.stderr[:500]}"
         )
     return out_path
+
+
+def extract_keyframes(
+    media_path: Path, temp_dir: str, interval: int = 60, max_frames: int = 10,
+) -> List[Path]:
+    """Extract keyframes from a video file at the given interval.
+
+    Returns a list of JPEG file paths. Returns empty list for audio files.
+    """
+    if media_path.suffix.lower() not in VIDEO_EXTENSIONS:
+        return []
+
+    frames_dir = Path(temp_dir) / "keyframes"
+    os.makedirs(frames_dir, exist_ok=True)
+
+    cmd = [
+        FFMPEG_CMD, "-y", "-i", str(media_path),
+        "-vf", f"fps=1/{interval},scale='min(1024,iw)':-1",
+        "-q:v", "2",
+        str(frames_dir / "frame_%04d.jpg"),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.warning("Keyframe extraction failed for %s: %s", media_path.name, result.stderr[:300])
+        return []
+
+    frames = sorted(frames_dir.glob("frame_*.jpg"))
+    if not frames:
+        return []
+
+    # Cap at max_frames by selecting evenly spaced subset
+    if len(frames) > max_frames:
+        step = len(frames) / max_frames
+        frames = [frames[int(i * step)] for i in range(max_frames)]
+
+    logger.info("Extracted %d keyframe(s) from %s", len(frames), media_path.name)
+    return frames
+
+
+def encode_image_base64(image_path: Path) -> str:
+    """Read an image file and return its base64-encoded string."""
+    with open(image_path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
 
 
 def setup_hf_mirror(url: str) -> None:
@@ -1437,7 +1624,7 @@ def create_engine(engine_name: str, model_name: Optional[str] = None) -> STTEngi
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# §8  Subtitle Formatters (SRT + LRC)
+# §8  Subtitle Formatters (SRT + LRC + MD)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -1462,12 +1649,55 @@ def generate_lrc(segments: List[Segment], title: str = "") -> str:
     return "\n".join(lines)
 
 
+def generate_transcript(
+    segments: List[Segment], config: PolishConfig,
+) -> str:
+    """Generate a Markdown transcript from segments using LLM.
+
+    Falls back to simple paragraph grouping if LLM is unavailable.
+    """
+    full_text = " ".join(seg.text for seg in segments)
+    if not full_text.strip():
+        return ""
+
+    # Try LLM-based transcript generation
+    messages = [
+        {"role": "system", "content": LLM_TRANSCRIPT_PROMPT},
+        {"role": "user", "content": full_text},
+    ]
+
+    response = ""
+    if config.api_url and config.api_key:
+        response = _call_openai_api(messages, config)
+    elif config.ollama_model:
+        response = _call_ollama(messages, config)
+
+    if response and response.strip():
+        logger.info("Markdown transcript generated via LLM")
+        return response.strip()
+
+    # Fallback: simple paragraph grouping (every ~10 segments)
+    logger.info("LLM unavailable for transcript, using simple paragraph grouping")
+    paragraphs: List[str] = []
+    group_size = 10
+    for i in range(0, len(segments), group_size):
+        group = segments[i:i + group_size]
+        para = " ".join(seg.text for seg in group).strip()
+        if para:
+            paragraphs.append(para)
+    return "\n\n".join(paragraphs)
+
+
 def write_subtitle(
-    segments: List[Segment], output_path: Path, fmt: str, title: str = ""
+    segments: List[Segment], output_path: Path, fmt: str,
+    title: str = "", polish_config: Optional[PolishConfig] = None,
 ) -> None:
     os.makedirs(output_path.parent, exist_ok=True)
     if fmt == "lrc":
         content = generate_lrc(segments, title=title)
+    elif fmt == "md":
+        config = polish_config or PolishConfig()
+        content = generate_transcript(segments, config)
     else:
         content = generate_srt(segments)
     output_path.write_text(content, encoding="utf-8-sig")
@@ -1584,6 +1814,55 @@ def polish_with_llm(
     return polished
 
 
+def auto_correct_with_llm(
+    segments: List[Segment], config: PolishConfig
+) -> List[Segment]:
+    """Use LLM to fix typos, wrong characters, and verbal mistakes in segments."""
+    if not segments:
+        return segments
+
+    logger.info("Auto-correcting transcription with LLM ...")
+    batch_size = 30
+    corrected: List[Segment] = []
+
+    for i in range(0, len(segments), batch_size):
+        batch = segments[i:i + batch_size]
+        seg_json = _segments_to_json(batch)
+        messages = [
+            {"role": "system", "content": LLM_AUTOCORRECT_PROMPT},
+            {"role": "user", "content": seg_json},
+        ]
+
+        if config.api_url and config.api_key:
+            response = _call_openai_api(messages, config)
+        else:
+            response = _call_ollama(messages, config)
+
+        if not response:
+            logger.warning("LLM returned empty response for auto-correct batch %d, keeping originals", i)
+            corrected.extend(batch)
+            continue
+
+        try:
+            cleaned = _extract_json_array(response)
+            new_segments = _json_to_segments(cleaned)
+            # Validate segment count matches — auto-correct must not merge/split
+            if len(new_segments) != len(batch):
+                logger.warning(
+                    "Auto-correct returned %d segments (expected %d) for batch %d. Keeping originals.",
+                    len(new_segments), len(batch), i,
+                )
+                corrected.extend(batch)
+            else:
+                corrected.extend(new_segments)
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.warning("Failed to parse auto-correct response: %s. Keeping originals.", e)
+            corrected.extend(batch)
+
+    logger.info("Auto-correction complete: %d segments processed", len(corrected))
+    return corrected
+
+
 def polish_with_nlp(
     segments: List[Segment], language: Optional[str] = None
 ) -> List[Segment]:
@@ -1687,6 +1966,158 @@ def _map_sentences_to_segments(
     return result
 
 
+# ─── Multimodal & Summarization ──────────────────────────────────────────────
+
+
+def _call_ollama_multimodal(
+    text: str, images_b64: List[str], config: PolishConfig,
+) -> str:
+    """Call Ollama API with multimodal content (text + images)."""
+    url = config.ollama_url.rstrip("/") + "/api/chat"
+    body = json.dumps({
+        "model": config.ollama_model,
+        "messages": [
+            {"role": "system", "content": LLM_SUMMARIZE_MULTIMODAL_PROMPT},
+            {"role": "user", "content": text, "images": images_b64},
+        ],
+        "stream": False,
+    }).encode("utf-8")
+    req = Request(url, data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urlopen(req, timeout=300) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        return result.get("message", {}).get("content", "")
+    except (URLError, HTTPError, TimeoutError) as e:
+        logger.warning("Ollama multimodal API call failed: %s", e)
+        return ""
+
+
+def _call_openai_api_multimodal(
+    text: str, images_b64: List[str], config: PolishConfig,
+) -> str:
+    """Call OpenAI-compatible API with vision content (text + images)."""
+    base = config.api_url.rstrip("/")
+    if not base.endswith("/v1"):
+        url = base + "/v1/chat/completions"
+    else:
+        url = base + "/chat/completions"
+
+    # Build multimodal user content
+    user_content: List[Dict] = [{"type": "text", "text": text}]
+    for img_b64 in images_b64:
+        user_content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"},
+        })
+
+    body = json.dumps({
+        "model": config.api_model,
+        "messages": [
+            {"role": "system", "content": LLM_SUMMARIZE_MULTIMODAL_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": 0.3,
+    }).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {config.api_key}",
+    }
+    req = Request(url, data=body, headers=headers)
+    try:
+        with urlopen(req, timeout=300) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        choices = result.get("choices", [])
+        if choices:
+            return choices[0].get("message", {}).get("content", "")
+        return ""
+    except (URLError, HTTPError, TimeoutError) as e:
+        logger.warning("OpenAI multimodal API call failed: %s", e)
+        return ""
+
+
+def summarize_content(
+    segments: List[Segment],
+    media_path: Path,
+    config: JobConfig,
+    temp_dir: str,
+    progress_cb: Optional[Callable] = None,
+) -> str:
+    """Generate a content summary. Uses multimodal analysis for video files."""
+    full_text = " ".join(seg.text for seg in segments)
+    if not full_text.strip():
+        return ""
+
+    polish_cfg = config.polish
+    is_video = media_path.suffix.lower() in VIDEO_EXTENSIONS
+
+    # Try multimodal summarization for video files
+    if is_video:
+        logger.info("Extracting keyframes for multimodal summarization ...")
+        frames = extract_keyframes(
+            media_path, temp_dir,
+            interval=config.summarize.keyframe_interval,
+        )
+        if frames:
+            images_b64 = [encode_image_base64(f) for f in frames]
+            logger.info("Attempting multimodal summary with %d keyframe(s) ...", len(images_b64))
+
+            # Try OpenAI-compatible API first (more likely to support vision)
+            if polish_cfg.api_url and polish_cfg.api_key:
+                response = _call_openai_api_multimodal(full_text, images_b64, polish_cfg)
+                if response and response.strip():
+                    logger.info("Multimodal summary generated via OpenAI-compatible API")
+                    return response.strip()
+
+            # Try Ollama multimodal
+            if polish_cfg.ollama_model:
+                response = _call_ollama_multimodal(full_text, images_b64, polish_cfg)
+                if response and response.strip():
+                    logger.info("Multimodal summary generated via Ollama")
+                    return response.strip()
+
+            logger.info("Multimodal summary failed, falling back to text-only summary")
+
+    # Text-only summary
+    messages = [
+        {"role": "system", "content": LLM_SUMMARIZE_PROMPT},
+        {"role": "user", "content": full_text},
+    ]
+
+    response = ""
+    if polish_cfg.api_url and polish_cfg.api_key:
+        response = _call_openai_api(messages, polish_cfg)
+    elif polish_cfg.ollama_model:
+        response = _call_ollama(messages, polish_cfg)
+
+    if response and response.strip():
+        logger.info("Text-only summary generated via LLM")
+        return response.strip()
+
+    # Last resort: simple stats-based summary
+    logger.info("LLM unavailable for summary, generating basic stats summary")
+    word_count = len(full_text.split())
+    duration = segments[-1].end if segments else 0
+    dur_min = int(duration // 60)
+    dur_sec = int(duration % 60)
+    first_text = segments[0].text if segments else ""
+    last_text = segments[-1].text if segments else ""
+    return (
+        f"## Summary\n\n"
+        f"- **Duration**: {dur_min}m {dur_sec}s\n"
+        f"- **Word count**: {word_count}\n"
+        f"- **Segments**: {len(segments)}\n\n"
+        f"### Opening\n\n{first_text}\n\n"
+        f"### Closing\n\n{last_text}\n"
+    )
+
+
+def write_summary(summary: str, output_path: Path) -> None:
+    """Write a summary Markdown file."""
+    os.makedirs(output_path.parent, exist_ok=True)
+    output_path.write_text(summary, encoding="utf-8")
+    logger.info("Summary saved: %s", output_path)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # §10  Core Processing Pipeline
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1702,7 +2133,8 @@ def process_file(
     temp_dir = tempfile.mkdtemp(prefix="tingshuo_")
     try:
         # Determine output path
-        ext = ".lrc" if config.format == "lrc" else ".srt"
+        ext_map = {"lrc": ".lrc", "md": ".md", "srt": ".srt"}
+        ext = ext_map.get(config.format, ".srt")
         if config.output_dir:
             out_dir = Path(config.output_dir)
         else:
@@ -1718,15 +2150,23 @@ def process_file(
             logger.warning("No speech detected in: %s", media_path.name)
             return None
 
-        # Polish
-        polished = result.segments
-        if config.polish.method == "llm":
-            polished = polish_with_llm(result.segments, config.polish)
-        elif config.polish.method == "nlp":
-            polished = polish_with_nlp(result.segments, config.language)
+        # Auto-correct (before polishing)
+        segments = result.segments
+        if config.auto_correct:
+            segments = auto_correct_with_llm(segments, config.polish)
 
-        # Write subtitle
-        write_subtitle(polished, output_path, config.format, title=media_path.stem)
+        # Polish
+        polished = segments
+        if config.polish.method == "llm":
+            polished = polish_with_llm(segments, config.polish)
+        elif config.polish.method == "nlp":
+            polished = polish_with_nlp(segments, config.language)
+
+        # Write output (SRT / LRC / MD)
+        write_subtitle(
+            polished, output_path, config.format,
+            title=media_path.stem, polish_config=config.polish,
+        )
 
         # Translation: generate translated subtitle files
         if config.translation.enabled and config.translation.target_languages:
@@ -1744,10 +2184,23 @@ def process_file(
                         hf_mirror=config.hf_mirror,
                     )
                     trans_path = out_dir / f"{media_path.stem}.{tgt}{ext}"
-                    write_subtitle(translated, trans_path, config.format, title=media_path.stem)
+                    write_subtitle(
+                        translated, trans_path, config.format,
+                        title=media_path.stem, polish_config=config.polish,
+                    )
                     logger.info("Translated subtitle saved: %s", trans_path)
                 except Exception as te:
                     logger.error("Translation to %s failed: %s", tgt, te)
+
+        # Summarization (must happen before temp_dir cleanup)
+        if config.summarize.enabled:
+            logger.info("Generating content summary for %s ...", media_path.name)
+            summary = summarize_content(
+                polished, media_path, config, temp_dir,
+            )
+            if summary:
+                summary_path = out_dir / f"{media_path.stem}.summary.md"
+                write_summary(summary, summary_path)
 
         return output_path
 
@@ -1813,13 +2266,15 @@ def process_batch(
 def build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tingshuo",
-        description="TingShuo (听说) - Generate SRT/LRC subtitles from audio/video files.",
+        description="TingShuo (听说) - Generate SRT/LRC/MD subtitles and transcripts from audio/video files.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
             "  tingshuo -i ./videos -e faster-whisper -f srt\n"
             "  tingshuo -i ./audio -e vosk -f lrc -o ./subtitles\n"
-            "  tingshuo -i ./media --polish-llm --ollama-model qwen2.5\n"
+            "  tingshuo -i ./lectures -f md --polish-llm --ollama-model qwen2.5\n"
+            "  tingshuo -i ./media --auto-correct --polish-llm\n"
+            "  tingshuo -i ./media --summarize --ollama-model qwen2.5\n"
             "  tingshuo -i ./media --polish-nlp -l zh\n"
             "  tingshuo --download -e faster-whisper -m large-v3\n"
             "  tingshuo --download-all -e faster-whisper\n"
@@ -1846,8 +2301,8 @@ def build_cli_parser() -> argparse.ArgumentParser:
         help="Output directory for subtitles (default: same as source files)",
     )
     io_group.add_argument(
-        "-f", "--format", choices=["srt", "lrc"], default="srt",
-        help="Subtitle format: srt or lrc (default: srt)",
+        "-f", "--format", choices=["srt", "lrc", "md"], default="srt",
+        help="Output format: srt, lrc, or md (Markdown transcript) (default: srt)",
     )
     io_group.add_argument(
         "--no-recursive", action="store_true",
@@ -1891,6 +2346,13 @@ def build_cli_parser() -> argparse.ArgumentParser:
         help="List installed Ollama models from the server (uses --ollama-url), then exit",
     )
 
+    # Auto-Correction
+    correct_group = parser.add_argument_group("Auto-Correction")
+    correct_group.add_argument(
+        "--auto-correct", action="store_true",
+        help="Auto-correct typos, wrong characters, and verbal mistakes using LLM",
+    )
+
     # Polishing
     pol_group = parser.add_argument_group("Subtitle Polishing")
     pol_excl = pol_group.add_mutually_exclusive_group()
@@ -1904,7 +2366,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
 
     # LLM settings
-    llm_group = parser.add_argument_group("LLM Settings (used with --polish-llm)")
+    llm_group = parser.add_argument_group("LLM Settings (used with --polish-llm, --auto-correct, --summarize)")
     llm_group.add_argument(
         "--ollama-url", metavar="URL", default=DEFAULT_OLLAMA_URL,
         help=f"Ollama API URL (default: {DEFAULT_OLLAMA_URL})",
@@ -1948,6 +2410,17 @@ def build_cli_parser() -> argparse.ArgumentParser:
     trans_group.add_argument(
         "--nllb-model", metavar="NAME", default=DEFAULT_NLLB_MODEL,
         help=f"NLLB model name (default: {DEFAULT_NLLB_MODEL})",
+    )
+
+    # Summarization
+    sum_group = parser.add_argument_group("Summarization")
+    sum_group.add_argument(
+        "--summarize", action="store_true",
+        help="Generate a content summary (.summary.md) alongside the output",
+    )
+    sum_group.add_argument(
+        "--keyframe-interval", metavar="SECONDS", type=int, default=60,
+        help="Seconds between keyframe extractions for video summarization (default: 60)",
     )
 
     return parser
@@ -2034,6 +2507,14 @@ def run_cli(args: argparse.Namespace) -> None:
     elif args.polish_nlp:
         polish.method = "nlp"
 
+    # If auto-correct or summarize or md format is used, ensure LLM config is populated
+    if args.auto_correct or args.summarize or args.format == "md":
+        polish.ollama_url = args.ollama_url
+        polish.ollama_model = args.ollama_model
+        polish.api_url = args.api_url
+        polish.api_key = args.api_key
+        polish.api_model = args.api_model
+
     translation = TranslationConfig()
     if args.translate:
         translation.enabled = True
@@ -2052,6 +2533,11 @@ def run_cli(args: argparse.Namespace) -> None:
             logger.error("--translate requires --target-lang with at least one language code.")
             sys.exit(1)
 
+    summarize_cfg = SummarizeConfig()
+    if args.summarize:
+        summarize_cfg.enabled = True
+        summarize_cfg.keyframe_interval = args.keyframe_interval
+
     config = JobConfig(
         input_dir=args.input,
         output_dir=args.output,
@@ -2063,6 +2549,8 @@ def run_cli(args: argparse.Namespace) -> None:
         polish=polish,
         translation=translation,
         recursive=not args.no_recursive,
+        auto_correct=args.auto_correct,
+        summarize=summarize_cfg,
     )
 
     def cli_progress(current: int, total: int, filename: str) -> None:
@@ -2286,6 +2774,38 @@ def launch_gui() -> None:
             self.format_var = tk.StringVar(value="srt")
             ttk.Radiobutton(fmt_frame, text="SRT", variable=self.format_var, value="srt").pack(side=tk.LEFT, padx=8)
             ttk.Radiobutton(fmt_frame, text="LRC", variable=self.format_var, value="lrc").pack(side=tk.LEFT, padx=8)
+            ttk.Radiobutton(fmt_frame, text=tr("transcript_opt"), variable=self.format_var, value="md").pack(side=tk.LEFT, padx=8)
+
+            # ── Auto-Correction & Summarization ──
+            extra_frame = ttk.LabelFrame(main, text=tr("auto_correct") + " / " + tr("summarize"), padding=6)
+            extra_frame.pack(fill=tk.X, **pad)
+
+            self.autocorrect_var = tk.BooleanVar(value=False)
+            ttk.Checkbutton(
+                extra_frame, text=tr("auto_correct"),
+                variable=self.autocorrect_var,
+            ).grid(row=0, column=0, sticky=tk.W)
+
+            self.summarize_var = tk.BooleanVar(value=False)
+            ttk.Checkbutton(
+                extra_frame, text=tr("summarize"),
+                variable=self.summarize_var,
+                command=self._toggle_summarize,
+            ).grid(row=0, column=1, sticky=tk.W, padx=(16, 0))
+
+            ttk.Label(extra_frame, text=tr("keyframe_interval")).grid(
+                row=0, column=2, sticky=tk.W, padx=(16, 0),
+            )
+            self.keyframe_interval_var = tk.StringVar(value="60")
+            self.keyframe_interval_entry = ttk.Entry(
+                extra_frame, textvariable=self.keyframe_interval_var, width=6,
+            )
+            self.keyframe_interval_entry.grid(row=0, column=3, sticky=tk.W, padx=4)
+            self.keyframe_interval_entry.config(state="disabled")
+
+            ttk.Label(
+                extra_frame, text=tr("multimodal_note"), foreground="gray",
+            ).grid(row=1, column=0, columnspan=4, sticky=tk.W, pady=(4, 0))
 
             # ── Polishing ──
             pol_frame = ttk.LabelFrame(main, text=tr("subtitle_polishing"), padding=6)
@@ -2552,6 +3072,10 @@ def launch_gui() -> None:
             state = "normal" if self.hf_mirror_var.get() else "disabled"
             self.hf_entry.config(state=state)
 
+        def _toggle_summarize(self) -> None:
+            state = "normal" if self.summarize_var.get() else "disabled"
+            self.keyframe_interval_entry.config(state=state)
+
         def _toggle_polish(self) -> None:
             method = self.polish_var.get()
             if method == "llm":
@@ -2768,6 +3292,23 @@ def launch_gui() -> None:
             lang = None if (not lang_raw or lang_raw.lower() == "auto") else lang_raw
             hf_mirror = self.hf_url_var.get().strip() if self.hf_mirror_var.get() else ""
 
+            # Ensure LLM config is populated for auto-correct / summarize / md
+            if self.autocorrect_var.get() or self.summarize_var.get() or self.format_var.get() == "md":
+                polish.ollama_url = self.ollama_url_var.get().strip() or DEFAULT_OLLAMA_URL
+                polish.ollama_model = self.ollama_model_var.get().strip() or DEFAULT_OLLAMA_MODEL
+                polish.api_url = polish.api_url or self.api_url_var.get().strip()
+                polish.api_key = polish.api_key or self.api_key_var.get().strip()
+                polish.api_model = polish.api_model or self.api_model_var.get().strip()
+
+            # Build summarize config
+            summarize_cfg = SummarizeConfig()
+            if self.summarize_var.get():
+                summarize_cfg.enabled = True
+                try:
+                    summarize_cfg.keyframe_interval = int(self.keyframe_interval_var.get())
+                except ValueError:
+                    summarize_cfg.keyframe_interval = 60
+
             return JobConfig(
                 input_dir=input_dir,
                 output_dir=output_dir,
@@ -2779,6 +3320,8 @@ def launch_gui() -> None:
                 polish=polish,
                 translation=translation,
                 recursive=True,
+                auto_correct=self.autocorrect_var.get(),
+                summarize=summarize_cfg,
             )
 
         def _start(self) -> None:

@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tingshuo"
 dynamic = ["version"]
-description = "Generate SRT/LRC subtitles from audio/video files using multiple STT engines with optional LLM polishing"
+description = "Generate SRT/LRC subtitles and Markdown transcripts from audio/video files with auto-correction, content summarization, and multimodal video analysis"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.9"
 authors = [
     {name = "TingShuo Team", email = "wedonotuse@outlook.com"},
 ]
-keywords = ["subtitle", "srt", "lrc", "speech-to-text", "whisper", "vosk", "transcription"]
+keywords = ["subtitle", "srt", "lrc", "speech-to-text", "whisper", "vosk", "transcription", "transcript", "auto-correct", "summarization", "multimodal"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",

@@ -1,13 +1,16 @@
 # TingShuo 听说
 
-**Generate SRT/LRC subtitles from audio/video files using multiple speech-to-text engines, with optional LLM polishing.**
+**Generate SRT/LRC subtitles and Markdown transcripts from audio/video files using multiple speech-to-text engines, with auto-correction, LLM polishing, and multimodal content summarization.**
 
-TingShuo recursively scans directories for media files, transcribes them using your choice of STT engine, and outputs subtitle files in SRT or LRC format. Optionally, subtitles can be polished using an LLM (Ollama or OpenAI-compatible API) or NLP sentence segmentation (nltk) to produce natural, complete sentences.
+TingShuo recursively scans directories for media files, transcribes them using your choice of STT engine, and outputs subtitle files in SRT, LRC, or Markdown transcript format. Features include LLM-based auto-correction of typos and verbal mistakes, subtitle polishing via LLM or NLP, and content summarization with multimodal video analysis.
 
 ## Features
 
 - **4 STT Engines**: faster-whisper, Vosk, OpenAI Whisper, whisper.cpp
-- **2 Output Formats**: SRT (SubRip) and LRC (lyrics)
+- **3 Output Formats**: SRT (SubRip), LRC (lyrics), and MD (Markdown transcript)
+- **Markdown Transcript**: Generate clean, structured transcripts from speeches and lectures
+- **Auto-Correction**: Fix typos, wrong characters, and verbal mistakes automatically via LLM
+- **Content Summarization**: Summarize audio/video content with multimodal video analysis (keyframe extraction + vision LLM)
 - **Subtitle Translation**: Translate subtitles to multiple target languages using NLLB or LLM
 - **Multi-language UI**: Interface supports English, Chinese, Japanese, Korean, French, German, Spanish, Italian, Portuguese, Russian
 - **LLM Polishing**: Merge fragmented subtitles into natural sentences via Ollama or OpenAI-compatible API
@@ -84,6 +87,31 @@ tingshuo -i ./media --polish-llm --api-url https://api.example.com --api-key sk-
 tingshuo -i ./media --polish-nlp -l en
 ```
 
+**Generate Markdown transcript from lectures:**
+```bash
+tingshuo -i ./lectures -f md --polish-llm --ollama-model qwen2.5
+```
+
+**Auto-correct typos and verbal mistakes:**
+```bash
+tingshuo -i ./media --auto-correct --ollama-model qwen2.5
+```
+
+**Auto-correct + LLM polishing combined:**
+```bash
+tingshuo -i ./media --auto-correct --polish-llm --ollama-model qwen2.5
+```
+
+**Generate content summary:**
+```bash
+tingshuo -i ./media --summarize --ollama-model qwen2.5
+```
+
+**Summarize with multimodal video analysis (OpenAI-compatible API):**
+```bash
+tingshuo -i ./videos --summarize --api-url https://api.example.com --api-key sk-xxx --api-model gpt-4o-mini
+```
+
 **Specify language and model:**
 ```bash
 tingshuo -i ./videos -e faster-whisper -m large-v3 -l zh
@@ -132,7 +160,9 @@ The GUI provides:
 - Engine and model selection dropdowns
 - **Language dropdown** with common languages (auto-detect, zh, en, ja, ko, etc.) or type custom codes
 - **Model download buttons** (Download / Download All) with progress feedback
-- Format toggle (SRT/LRC)
+- Format toggle (SRT/LRC/MD)
+- **Auto-correction checkbox**: Enable LLM-based auto-correction of transcription errors
+- **Content summary checkbox**: Generate summary alongside output, with keyframe interval setting
 - Polishing options (None / LLM / NLP) with configuration panels
 - **Translation panel**: Enable translation, select target languages, choose backend (NLLB or LLM)
 - **Ollama model dropdown** with Refresh button to query installed models from the server
@@ -145,14 +175,16 @@ The GUI provides:
 ## CLI Reference
 
 ```
-usage: tingshuo [-h] [--version] [--gui] [-i DIR] [-o DIR] [-f {srt,lrc}]
+usage: tingshuo [-h] [--version] [--gui] [-i DIR] [-o DIR] [-f {srt,lrc,md}]
                 [--no-recursive] [-e ENGINE] [-m NAME] [-l CODE]
                 [--hf-mirror URL] [--download] [--download-all]
-                [--list-ollama-models] [--polish-llm | --polish-nlp]
+                [--list-ollama-models] [--auto-correct]
+                [--polish-llm | --polish-nlp]
                 [--ollama-url URL] [--ollama-model NAME] [--api-url URL]
                 [--api-key KEY] [--api-model NAME] [-v]
                 [--translate] [--target-lang CODES]
                 [--trans-backend {nllb,llm}] [--nllb-model NAME]
+                [--summarize] [--keyframe-interval SECONDS]
 ```
 
 ### Input/Output
@@ -161,7 +193,7 @@ usage: tingshuo [-h] [--version] [--gui] [-i DIR] [-o DIR] [-f {srt,lrc}]
 |----------|-------------|
 | `-i`, `--input DIR` | Input directory containing audio/video files (required) |
 | `-o`, `--output DIR` | Output directory for subtitles (default: same as source) |
-| `-f`, `--format {srt,lrc}` | Subtitle format (default: srt) |
+| `-f`, `--format {srt,lrc,md}` | Output format: srt, lrc, or md (Markdown transcript) (default: srt) |
 | `--no-recursive` | Do not scan subdirectories |
 
 ### STT Engine
@@ -192,6 +224,17 @@ usage: tingshuo [-h] [--version] [--gui] [-i DIR] [-o DIR] [-f {srt,lrc}]
 |----------|-------------|
 | `--polish-llm` | Polish with LLM (Ollama or OpenAI-compatible API) |
 | `--polish-nlp` | Polish with NLP sentence segmentation (nltk) |
+
+### Auto-Correction
+
+| Argument | Description |
+|----------|-------------|
+| `--auto-correct` | Auto-correct typos, wrong characters, and verbal mistakes using LLM |
+
+### LLM Settings
+
+| Argument | Description |
+|----------|-------------|
 | `--ollama-url URL` | Ollama API URL (default: http://localhost:11434) |
 | `--ollama-model NAME` | Ollama model name (default: qwen2.5) |
 | `--api-url URL` | OpenAI-compatible API base URL |
@@ -214,6 +257,13 @@ usage: tingshuo [-h] [--version] [--gui] [-i DIR] [-o DIR] [-f {srt,lrc}]
 | `--target-lang CODES` | Comma-separated target language codes, e.g. `zh,en,ja` |
 | `--trans-backend {nllb,llm}` | Translation backend: `nllb` (Helsinki-NLP/NLLB) or `llm` (default: nllb) |
 | `--nllb-model NAME` | NLLB model name (default: facebook/nllb-200-distilled-600M) |
+
+### Summarization
+
+| Argument | Description |
+|----------|-------------|
+| `--summarize` | Generate a content summary (.summary.md) alongside the output |
+| `--keyframe-interval SECONDS` | Seconds between keyframe extractions for video summarization (default: 60) |
 
 ## Supported Formats
 
@@ -239,10 +289,23 @@ This is the second subtitle line.
 **LRC** (Lyrics):
 ```
 [ti:filename]
-[re:TingShuo v0.1.0]
+[re:TingShuo v0.1.3]
 
 [00:01.50]This is the first subtitle line.
 [00:05.00]This is the second subtitle line.
+```
+
+**MD** (Markdown Transcript):
+```markdown
+## Introduction
+
+This is the opening section of the speech, organized into
+natural paragraphs by the LLM.
+
+## Main Topic
+
+The speaker then moved on to discuss the main topic,
+with key points organized into readable paragraphs.
 ```
 
 ## STT Engines
@@ -319,6 +382,77 @@ tingshuo -i ./media --polish-nlp -l en
 ```
 
 Supports English, German, French, Spanish, Italian, Portuguese, and more via nltk. For Chinese/Japanese/Korean, uses punctuation-based sentence splitting.
+
+## Markdown Transcript
+
+TingShuo can generate clean, structured Markdown transcripts from speeches, lectures, and presentations. Instead of timestamped subtitles, the MD format produces flowing text organized into sections and paragraphs.
+
+```bash
+# Generate Markdown transcript (uses LLM to structure paragraphs)
+tingshuo -i ./lectures -f md --polish-llm --ollama-model qwen2.5
+
+# With auto-correction for cleaner output
+tingshuo -i ./lectures -f md --auto-correct --polish-llm --ollama-model qwen2.5
+```
+
+The LLM organizes the raw transcription into logical sections with Markdown headers and paragraphs. If no LLM is configured, a simple paragraph grouping fallback is used.
+
+## Auto-Correction
+
+TingShuo can automatically fix transcription errors before polishing or output. This includes:
+
+- **Typos and wrong characters** (错别字): Common misrecognitions from STT engines
+- **Verbal mistakes** (口误): Slips of the tongue in speech
+- **Filler words**: Remove "um", "uh", "嗯", "那个", etc. when they add no meaning
+
+```bash
+# Auto-correct only
+tingshuo -i ./media --auto-correct --ollama-model qwen2.5
+
+# Auto-correct + LLM polishing (correction happens first, then polishing)
+tingshuo -i ./media --auto-correct --polish-llm --ollama-model qwen2.5
+
+# Auto-correct with OpenAI-compatible API
+tingshuo -i ./media --auto-correct --api-url https://api.example.com --api-key sk-xxx --api-model gpt-4o-mini
+```
+
+Auto-correction preserves segment boundaries (timestamps remain unchanged) and works with all output formats (SRT, LRC, MD).
+
+## Content Summarization
+
+TingShuo can generate a content summary (`.summary.md`) alongside the normal output. For video files, it supports multimodal analysis using keyframe extraction and vision-capable LLMs.
+
+### Text-Only Summary (Audio or Video)
+
+```bash
+# Summarize using Ollama
+tingshuo -i ./media --summarize --ollama-model qwen2.5
+
+# Summarize using OpenAI-compatible API
+tingshuo -i ./media --summarize --api-url https://api.example.com --api-key sk-xxx --api-model gpt-4o-mini
+```
+
+### Multimodal Video Summary
+
+For video files, TingShuo extracts keyframes using ffmpeg and sends them along with the transcript to a vision-capable LLM for comprehensive analysis:
+
+```bash
+# Multimodal summary with keyframe extraction (default: 60s intervals)
+tingshuo -i ./videos --summarize --api-url https://api.example.com --api-key sk-xxx --api-model gpt-4o-mini
+
+# Custom keyframe interval (every 30 seconds)
+tingshuo -i ./videos --summarize --keyframe-interval 30 --api-url https://api.example.com --api-key sk-xxx --api-model gpt-4o-mini
+
+# With Ollama multimodal models (e.g., llava, llama3.2-vision)
+tingshuo -i ./videos --summarize --ollama-model llava
+```
+
+The multimodal summary integrates:
+- Spoken content from the transcript
+- Visual elements: slides, diagrams, charts, demonstrations
+- Key visual information that complements the spoken content
+
+If the LLM does not support vision, TingShuo automatically falls back to a text-only summary.
 
 ## Subtitle Translation
 
