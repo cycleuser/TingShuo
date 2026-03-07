@@ -30,7 +30,7 @@ NLP sentence segmentation (nltk). Provides both CLI and GUI interfaces.
 # §2  Version & Metadata
 # ═══════════════════════════════════════════════════════════════════════════════
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 __author__ = "TingShuo Team"
 __license__ = "GPL-3.0-or-later"
 
