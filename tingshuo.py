@@ -124,6 +124,18 @@ NLTK_LANG_MAP: Dict[str, str] = {
 # CJK sentence-ending punctuation for languages without nltk tokenizer support
 CJK_SENT_END = re.compile(r"([。！？．!?\.\?!]+)")
 
+# Secondary clause boundaries for elastic splitting
+CJK_CLAUSE_SPLIT = re.compile(r"(?<=[，、；：,;:])")
+LATIN_CLAUSE_SPLIT = re.compile(r"(?<=[,;:\-\u2013\u2014])\s+")
+
+# Elastic length thresholds (characters)
+ELASTIC_CJK_MIN = 10
+ELASTIC_CJK_TARGET = 30
+ELASTIC_CJK_MAX = 50
+ELASTIC_LATIN_MIN = 15
+ELASTIC_LATIN_TARGET = 50
+ELASTIC_LATIN_MAX = 80
+
 # Common languages for dropdown selection
 COMMON_LANGUAGES: List[Tuple[str, str]] = [
     ("auto", "auto (detect)"),
@@ -177,16 +189,26 @@ LLM_POLISH_PROMPT = """\
 You are a subtitle polishing assistant. You receive a JSON array of subtitle \
 segments, each with "s" (start time in seconds), "e" (end time in seconds), \
 and "t" (text). Your task is to merge fragmented segments into complete, \
-natural sentences.
+natural sentences and correct transcription errors.
 
 Rules:
 1. Merge fragments that belong to the same sentence into one segment.
 2. For a merged segment, use the "s" of the first fragment and "e" of the last.
-3. Preserve ALL original meaning. Do not add, remove, or rephrase content.
-4. Fix obvious transcription errors only if the context makes the correction \
-   unambiguous.
-5. Return a JSON array in the exact same format: [{"s": ..., "e": ..., "t": ...}, ...]
-6. Return ONLY the JSON array, no other text.
+3. Actively correct transcription errors: fix homophones (同音词/近音词), \
+   wrong characters (错别字), misheard words, and verbal mistakes (口误). \
+   Use surrounding context to determine the intended word. For example, \
+   "危机分" should be "微积分" in a math context; "集合论" not "鸡和论".
+4. Preserve the original meaning while improving transcription accuracy. \
+   Do not add new content or change the speaker's intent.
+5. Target segment length: each output segment should be approximately \
+   15-50 characters for CJK text, or 8-25 words for non-CJK text. \
+   If a merged sentence exceeds this range, split it at natural clause \
+   boundaries (commas, semicolons, conjunctions) into multiple segments, \
+   assigning appropriate time ranges to each.
+6. Do not produce very short segments (fewer than 10 characters or 5 words) \
+   unless the utterance is naturally complete at that length.
+7. Return a JSON array in the exact same format: [{"s": ..., "e": ..., "t": ...}, ...]
+8. Return ONLY the JSON array, no other text.
 """
 
 LLM_AUTOCORRECT_PROMPT = """\
@@ -1899,11 +1921,172 @@ def polish_with_nlp(
     full_text = " ".join(seg.text for seg in segments)
     sentences = nltk.sent_tokenize(full_text, language=nltk_lang)
 
-    return _map_sentences_to_segments(sentences, segments)
+    # Elastic post-processing: split overly long sentences, merge very short ones
+    refined: List[str] = []
+    for sent in sentences:
+        if len(sent) > ELASTIC_LATIN_MAX:
+            # Split at clause boundaries and accumulate to target length
+            parts = LATIN_CLAUSE_SPLIT.split(sent)
+            buf = ""
+            for part in parts:
+                if buf and len(buf) + len(part) > ELASTIC_LATIN_TARGET:
+                    refined.append(buf.strip())
+                    buf = part
+                else:
+                    buf = buf + part if buf else part
+            if buf.strip():
+                refined.append(buf.strip())
+        elif len(sent) < ELASTIC_LATIN_MIN and refined and len(refined[-1]) < ELASTIC_LATIN_TARGET:
+            # Merge very short sentence with previous short one
+            refined[-1] = refined[-1] + " " + sent
+        else:
+            refined.append(sent)
+
+    return _map_sentences_to_segments(refined, segments)
+
+
+def _split_long_segment(
+    text: str, start: float, end: float, is_cjk: bool = False,
+) -> List[Segment]:
+    """Split an overly long segment at clause boundaries with proportional timestamps."""
+    text = text.strip()
+    if not text:
+        return []
+
+    max_len = ELASTIC_CJK_MAX if is_cjk else ELASTIC_LATIN_MAX
+    target_len = ELASTIC_CJK_TARGET if is_cjk else ELASTIC_LATIN_TARGET
+
+    # Already at or below target length - no splitting needed
+    if len(text) <= target_len:
+        return [Segment(start=start, end=end, text=text)]
+
+    # Split at secondary clause boundaries
+    splitter = CJK_CLAUSE_SPLIT if is_cjk else LATIN_CLAUSE_SPLIT
+    parts = splitter.split(text)
+
+    # If regex produced no splits and text is within max, accept it
+    if len(parts) <= 1:
+        if len(text) <= max_len:
+            return [Segment(start=start, end=end, text=text)]
+        return _hard_split_segment(text, start, end, target_len, is_cjk)
+
+    # Accumulate chunks to target length
+    total_chars = len(text)
+    duration = end - start
+    result: List[Segment] = []
+    buf = ""
+    buf_char_offset = 0  # character offset of buffer start within original text
+
+    for part in parts:
+        if buf and len(buf) + len(part) > target_len:
+            # Emit current buffer
+            seg_start = start + (buf_char_offset / total_chars) * duration
+            seg_end = start + ((buf_char_offset + len(buf)) / total_chars) * duration
+            result.append(Segment(start=round(seg_start, 3), end=round(seg_end, 3), text=buf.strip()))
+            buf_char_offset += len(buf)
+            buf = part
+        else:
+            buf = buf + part if buf else part
+
+    if buf.strip():
+        seg_start = start + (buf_char_offset / total_chars) * duration
+        result.append(Segment(start=round(seg_start, 3), end=round(end, 3), text=buf.strip()))
+
+    # Recursively split any still-oversized segments
+    final: List[Segment] = []
+    for seg in result:
+        if len(seg.text) > max_len:
+            final.extend(_hard_split_segment(seg.text, seg.start, seg.end, target_len, is_cjk))
+        else:
+            final.append(seg)
+
+    return final if final else [Segment(start=start, end=end, text=text)]
+
+
+def _hard_split_segment(
+    text: str, start: float, end: float, target_len: int, is_cjk: bool,
+) -> List[Segment]:
+    """Hard-split text at target length on word/character boundaries."""
+    total_chars = len(text)
+    duration = end - start
+    result: List[Segment] = []
+    pos = 0
+
+    while pos < total_chars:
+        chunk_end = min(pos + target_len, total_chars)
+        if chunk_end < total_chars and not is_cjk:
+            # For Latin, try to break at a space
+            space_pos = text.rfind(" ", pos, chunk_end + 10)
+            if space_pos > pos:
+                chunk_end = space_pos + 1
+        chunk = text[pos:chunk_end].strip()
+        if chunk:
+            seg_start = start + (pos / total_chars) * duration
+            seg_end = start + (chunk_end / total_chars) * duration if chunk_end < total_chars else end
+            result.append(Segment(start=round(seg_start, 3), end=round(seg_end, 3), text=chunk))
+        pos = chunk_end
+
+    return result if result else [Segment(start=start, end=end, text=text)]
+
+
+def _merge_short_segments(
+    segments: List[Segment], is_cjk: bool = False,
+) -> List[Segment]:
+    """Merge consecutive short segments that are below the minimum length threshold."""
+    if not segments:
+        return segments
+
+    min_len = ELASTIC_CJK_MIN if is_cjk else ELASTIC_LATIN_MIN
+    target_len = ELASTIC_CJK_TARGET if is_cjk else ELASTIC_LATIN_TARGET
+    max_len = ELASTIC_CJK_MAX if is_cjk else ELASTIC_LATIN_MAX
+    joiner = "" if is_cjk else " "
+
+    result: List[Segment] = []
+    buf_texts: List[str] = []
+    buf_start: Optional[float] = None
+    buf_end: float = 0.0
+
+    for seg in segments:
+        combined_len = len(joiner.join(buf_texts + [seg.text]))
+
+        if buf_start is None:
+            # Start a new buffer
+            buf_texts = [seg.text]
+            buf_start = seg.start
+            buf_end = seg.end
+        elif len(joiner.join(buf_texts)) < min_len and combined_len <= target_len:
+            # Current buffer is too short and merging won't exceed target
+            buf_texts.append(seg.text)
+            buf_end = seg.end
+        else:
+            # Emit current buffer, start new one
+            result.append(Segment(
+                start=buf_start, end=buf_end,
+                text=joiner.join(buf_texts).strip(),
+            ))
+            buf_texts = [seg.text]
+            buf_start = seg.start
+            buf_end = seg.end
+
+    # Flush remaining buffer
+    if buf_texts and buf_start is not None:
+        merged = joiner.join(buf_texts).strip()
+        if merged:
+            # Try to merge with last result segment if both are short
+            if result and len(merged) < min_len and len(result[-1].text) + len(merged) <= max_len:
+                prev = result.pop()
+                merged = joiner.join([prev.text, merged]).strip()
+                result.append(Segment(start=prev.start, end=buf_end, text=merged))
+            else:
+                result.append(Segment(start=buf_start, end=buf_end, text=merged))
+
+    return result
 
 
 def _polish_cjk(segments: List[Segment]) -> List[Segment]:
-    result: List[Segment] = []
+    """Polish CJK subtitles: split on sentence boundaries with elastic length control."""
+    # Pass 1: Split on sentence-ending punctuation
+    raw_result: List[Segment] = []
     buf_text: List[str] = []
     buf_start: Optional[float] = None
     buf_end: float = 0.0
@@ -1916,12 +2099,26 @@ def _polish_cjk(segments: List[Segment]) -> List[Segment]:
 
         combined = "".join(buf_text)
         if CJK_SENT_END.search(combined):
-            result.append(Segment(start=buf_start, end=buf_end, text=combined.strip()))
+            raw_result.append(Segment(start=buf_start, end=buf_end, text=combined.strip()))
             buf_text = []
             buf_start = None
 
+    # Handle remainder without sentence-ending punctuation
     if buf_text and buf_start is not None:
-        result.append(Segment(start=buf_start, end=buf_end, text="".join(buf_text).strip()))
+        remainder = "".join(buf_text).strip()
+        if remainder:
+            # Split unpunctuated remainder at clause boundaries instead of one mega-segment
+            raw_result.extend(_split_long_segment(remainder, buf_start, buf_end, is_cjk=True))
+
+    # Pass 2: Elastic refinement - split oversized, merge undersized
+    refined: List[Segment] = []
+    for seg in raw_result:
+        if len(seg.text) > ELASTIC_CJK_MAX:
+            refined.extend(_split_long_segment(seg.text, seg.start, seg.end, is_cjk=True))
+        else:
+            refined.append(seg)
+
+    result = _merge_short_segments(refined, is_cjk=True)
 
     logger.info("CJK NLP polishing: %d -> %d segments", len(segments), len(result))
     return result
@@ -1961,6 +2158,15 @@ def _map_sentences_to_segments(
     while seg_idx < seg_count:
         result.append(segments[seg_idx])
         seg_idx += 1
+
+    # Elastic guardrail: split oversized and merge undersized segments
+    guarded: List[Segment] = []
+    for seg in result:
+        if len(seg.text) > ELASTIC_LATIN_MAX:
+            guarded.extend(_split_long_segment(seg.text, seg.start, seg.end, is_cjk=False))
+        else:
+            guarded.append(seg)
+    result = _merge_short_segments(guarded, is_cjk=False)
 
     logger.info("NLP polishing: %d -> %d segments", len(segments), len(result))
     return result
