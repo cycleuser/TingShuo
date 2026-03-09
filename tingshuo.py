@@ -32,7 +32,7 @@ summarization with multimodal video analysis. Provides both CLI and GUI interfac
 # §2  Version & Metadata
 # ═══════════════════════════════════════════════════════════════════════════════
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 __author__ = "TingShuo Team"
 __license__ = "GPL-3.0-or-later"
 
