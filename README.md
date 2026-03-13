@@ -15,11 +15,22 @@ TingShuo recursively scans directories for media files, transcribes them using y
 - **Multi-language UI**: Interface supports English, Chinese, Japanese, Korean, French, German, Spanish, Italian, Portuguese, Russian
 - **LLM Polishing**: Merge fragmented subtitles into natural sentences via Ollama or OpenAI-compatible API
 - **NLP Polishing**: Sentence boundary detection via nltk (no LLM required)
-- **CLI + GUI**: Full command-line interface and tkinter graphical interface
+- **CLI + GUI + Web**: Full command-line interface, tkinter graphical interface, and Web interface
 - **Recursive Scanning**: Process entire directory trees of media files
 - **HuggingFace Mirror**: Built-in support for HF mirror (useful in China mainland)
 - **Flexible Output**: Save subtitles alongside source files or to a custom directory
 - **Settings Persistence**: UI language and preferences saved to `~/.config/tingshuo/settings.json`
+
+## Screenshots
+
+### GUI Interface
+![GUI Screenshot](images/gui_screenshot.png)
+
+### Web Interface
+![Web Screenshot](images/web_screenshot.png)
+
+### CLI Usage
+![Transcription](images/transcription_basic.svg)
 
 ## Installation
 
@@ -158,21 +169,36 @@ tingshuo --gui
 The GUI provides:
 - Directory selection with browse buttons
 - Engine and model selection dropdowns
-- **Language dropdown** with common languages (auto-detect, zh, en, ja, ko, etc.) or type custom codes
-- **Model download buttons** (Download / Download All) with progress feedback
+- **Language dropdown** with common languages
+- **Model download buttons**
 - Format toggle (SRT/LRC/MD)
-- **Auto-correction checkbox**: Enable LLM-based auto-correction of transcription errors
-- **Content summary checkbox**: Generate summary alongside output, with keyframe interval setting
-- Polishing options (None / LLM / NLP) with configuration panels
-- **Translation panel**: Enable translation, select target languages, choose backend (NLLB or LLM)
-- **Ollama model dropdown** with Refresh button to query installed models from the server
-- **Menu bar**: Help > Settings (UI language), Help > About (version info)
-- **Multi-language interface**: Settings allow switching between 10 UI languages
-- HuggingFace mirror toggle
+- **Auto-correction checkbox**
+- **Content summary checkbox**
+- Polishing options (None / LLM / NLP)
+- **Translation panel**
+- **Ollama model dropdown**
+- **Multi-language interface**
 - Progress bar and real-time log output
-- Start/Stop controls
 
-## CLI Reference
+### Web Interface
+
+Launch the Gradio-based Web interface:
+
+```bash
+python web_ui.py
+```
+
+Open `http://localhost:7860` in your browser.
+
+The Web UI provides:
+- File upload (drag and drop)
+- Engine, Model, Language selection
+- Format selection (SRT/LRC/MD)
+- Polishing options (Ollama/NLP)
+- Translation settings
+- Real-time logs and file download
+
+### CLI Reference
 
 ```
 usage: tingshuo [-h] [--version] [--gui] [-i DIR] [-o DIR] [-f {srt,lrc,md}]
