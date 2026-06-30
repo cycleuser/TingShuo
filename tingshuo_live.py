@@ -615,9 +615,8 @@ class StreamingTranscriber(ABC):
 
     @abstractmethod
     def transcribe_chunk(self, audio: "np.ndarray",
-                         language: Optional[str] = None) -> str:
-        """Transcribe a single audio chunk (numpy float32 array, 16kHz mono).
-        Returns the transcribed text."""
+                         language: Optional[str] = None) -> Tuple[str, str]:
+        """Transcribe a single audio chunk. Returns (text, language)."""
         ...
 
     @abstractmethod
@@ -662,7 +661,8 @@ class FasterWhisperStreaming(StreamingTranscriber):
         )
 
     def transcribe_chunk(self, audio: "np.ndarray",
-                         language: Optional[str] = None) -> str:
+                         language: Optional[str] = None) -> Tuple[str, str]:
+        """Transcribe audio chunk. Returns (text, detected_language)."""
         self._load_model()
 
         # Write audio to temp WAV
@@ -673,9 +673,8 @@ class FasterWhisperStreaming(StreamingTranscriber):
 
             with wave.open(tmp_path, 'wb') as wf:
                 wf.setnchannels(1)
-                wf.setsampwidth(2)  # 16-bit PCM
+                wf.setsampwidth(2)
                 wf.setframerate(SAMPLE_RATE)
-                # Convert float32 [-1,1] → int16
                 audio_int16 = (audio * 32767).clip(-32768, 32767).astype(np.int16)
                 wf.writeframes(audio_int16.tobytes())
 
@@ -683,9 +682,10 @@ class FasterWhisperStreaming(StreamingTranscriber):
             if language:
                 kwargs["language"] = language
 
-            segments_gen, _ = self._model.transcribe(tmp_path, **kwargs)
+            segments_gen, info = self._model.transcribe(tmp_path, **kwargs)
             texts = [seg.text.strip() for seg in segments_gen if seg.text.strip()]
-            return " ".join(texts)
+            detected_lang = getattr(info, "language", language or "")
+            return " ".join(texts), detected_lang
 
         finally:
             if tmp_path and os.path.exists(tmp_path):
@@ -748,7 +748,7 @@ class VoskStreaming(StreamingTranscriber):
         self._recognizer.SetWords(True)
 
     def transcribe_chunk(self, audio: "np.ndarray",
-                         language: Optional[str] = None) -> str:
+                         language: Optional[str] = None) -> Tuple[str, str]:
         self._load_model()
 
         # Vosk expects 16-bit PCM bytes
@@ -757,10 +757,10 @@ class VoskStreaming(StreamingTranscriber):
 
         if self._recognizer.AcceptWaveform(data):
             result = json.loads(self._recognizer.Result())
-            return result.get("text", "")
+            return result.get("text", ""), (language or "")
         else:
             partial = json.loads(self._recognizer.PartialResult())
-            return partial.get("partial", "")
+            return partial.get("partial", ""), (language or "")
 
     def reset_recognizer(self):
         """Reset the recognizer for a new utterance."""
@@ -1609,15 +1609,23 @@ class LiveSession:
 
             audio_seg, start_t, end_t = item
             try:
-                text = self._transcriber.transcribe_chunk(
+                text, detected = self._transcriber.transcribe_chunk(
                     audio_seg, language=self._language,
                 )
 
-                # Detect language on first successful result
-                if not self._detected_language and self._language is None:
+                # Use user-specified language, or faster-whisper's detection
+                if self._language:
+                    lang = self._language
+                elif detected:
+                    lang = detected
+                    self._detected_language = detected  # track for display
+                elif not self._detected_language:
+                    # Fallback: heuristic guess (only if whisper gives nothing)
                     self._detected_language = self._guess_language(text)
+                    lang = self._detected_language
+                else:
+                    lang = self._detected_language
 
-                lang = self._language or self._detected_language or ""
                 if text.strip():
                     segment = LiveSegment(
                         text=text.strip(),
