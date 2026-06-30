@@ -1365,7 +1365,6 @@ class LiveSession:
 
         # Components
         self._capture: Optional[AudioCapture] = None
-        self._vad: Optional[VoiceActivityDetector] = None
         self._transcriber: Optional[StreamingTranscriber] = None
         self._translator: Optional[LiveTranslator] = None
         self._overlay: Optional[SubtitleOverlay] = None
@@ -1374,13 +1373,16 @@ class LiveSession:
         # State
         self._running = False
         self._stop_event = threading.Event()
-        self._audio_queue: queue.Queue = queue.Queue(maxsize=200)
-        self._segment_queue: queue.Queue = queue.Queue(maxsize=50)
+        self._audio_queue: queue.Queue = queue.Queue(maxsize=500)
         self._result_queue: queue.Queue = queue.Queue(maxsize=100)
         self._language: Optional[str] = config.language
         self._detected_language: str = ""
         self._session_start: float = 0.0
         self._worker_threads: List[threading.Thread] = []
+        # Sliding window state
+        self._audio_buffer: List[np.ndarray] = []  # accumulated audio frames
+        self._buffer_start_time: float = 0.0
+        self._last_processed_end: float = 0.0  # avoid repeating sentences
 
     def prepare_overlay(self):
         """Create the overlay window on the calling thread (must be main/GUI thread).
@@ -1450,30 +1452,19 @@ class LiveSession:
 
         # ── Start worker threads ──
 
-        # Transcription worker: takes VAD segments, runs STT, pushes results
-        n_transcribers = max(1, min(2, (os.cpu_count() or 4) // 2))
-        for i in range(n_transcribers):
-            t = threading.Thread(
-                target=self._transcribe_worker,
-                name=f"ts-transcribe-{i}",
-                daemon=True,
-            )
-            t.start()
-            self._worker_threads.append(t)
-
-        # Display worker: takes results, runs translation, updates overlay
+        # Sliding-window accumulator: periodically feeds audio to whisper
         t = threading.Thread(
-            target=self._display_worker,
-            name="ts-display",
+            target=self._accumulator_worker,
+            name="ts-accumulator",
             daemon=True,
         )
         t.start()
         self._worker_threads.append(t)
 
-        # ── Audio processor: VAD on dedicated thread (NOT on audio callback) ──
+        # Display worker: takes results, runs translation, updates overlay
         t = threading.Thread(
-            target=self._audio_processor,
-            name="ts-audio-proc",
+            target=self._display_worker,
+            name="ts-display",
             daemon=True,
         )
         t.start()
@@ -1510,27 +1501,16 @@ class LiveSession:
         if self._capture:
             self._capture.stop()
 
-        # Signal audio processor to stop
+        # Signal accumulator to stop
         try:
-            self._audio_queue.put_nowait((None, 0))  # sentinel
+            self._audio_queue.put_nowait((None, 0))
         except queue.Full:
             pass
 
-        # Flush VAD (runs on audio processor thread — wait a bit)
-        time.sleep(0.3)
-        if self._vad:
-            remaining = self._vad.flush()
-            if remaining:
-                audio_seg, start_t, end_t = remaining
-                try:
-                    self._segment_queue.put_nowait((audio_seg, start_t, end_t))
-                except queue.Full:
-                    pass
-
-        # Signal workers to finish
+        # Signal workers
         for _ in self._worker_threads:
             try:
-                self._segment_queue.put_nowait(None)  # sentinel
+                self._result_queue.put_nowait(None)
             except queue.Full:
                 pass
 
@@ -1548,82 +1528,104 @@ class LiveSession:
 
         self._on_log("Live session stopped.")
 
-    def _audio_processor(self):
-        """Worker: pull raw audio frames, run VAD, push speech segments.
-        Runs VAD (torch) on a dedicated thread, NOT the real-time audio callback."""
-        # Lazy-init VAD on this worker thread
-        if self._vad is None:
-            self._vad = VoiceActivityDetector(
-                sample_rate=self.config.sample_rate,
-                threshold=self.config.vad_threshold,
-                silence_timeout=self.config.silence_timeout,
-                max_duration=self.config.max_segment_duration,
-                min_duration=self.config.min_segment_duration,
+    # ── Sliding-window accumulator ──
+
+    def _accumulator_worker(self):
+        """Accumulate audio in a sliding window, periodically send to
+        faster-whisper with built-in VAD for better sentence boundaries."""
+        WINDOW_SEC = 24.0
+        STEP_SEC = 5.0
+        last_process_time = 0.0
+
+        while not self._stop_event.is_set():
+            try:
+                item = self._audio_queue.get(timeout=0.3)
+            except queue.Empty:
+                now = time.time() - self._session_start
+                if self._audio_buffer and (now - last_process_time) >= STEP_SEC:
+                    self._process_window()
+                    last_process_time = now
+                continue
+
+            if item is None or (isinstance(item, tuple) and item[0] is None):
+                if self._audio_buffer:
+                    self._process_window()
+                break
+
+            chunk, _timestamp = item
+            self._audio_buffer.append(chunk)
+
+            # Trim to window size
+            total = sum(len(c) for c in self._audio_buffer)
+            max_s = int(WINDOW_SEC * SAMPLE_RATE)
+            while total > max_s and len(self._audio_buffer) > 1:
+                d = self._audio_buffer.pop(0)
+                total -= len(d)
+                self._buffer_start_time += len(d) / SAMPLE_RATE
+
+            now = time.time() - self._session_start
+            if total >= SAMPLE_RATE * 3 and (now - last_process_time) >= STEP_SEC:
+                self._process_window()
+                last_process_time = now
+
+    def _process_window(self):
+        """Feed audio buffer to faster-whisper with vad_filter."""
+        if not self._audio_buffer:
+            return
+        if not isinstance(self._transcriber, FasterWhisperStreaming):
+            return
+
+        # Ensure model is loaded
+        self._transcriber._load_model()
+        if self._transcriber._model is None:
+            return
+
+        try:
+            audio = np.concatenate(self._audio_buffer)
+        except (ValueError, TypeError):
+            return
+        if len(audio) < SAMPLE_RATE:
+            return
+
+        try:
+            from faster_whisper.vad import VadOptions
+            vad_opts = VadOptions(
+                threshold=0.4,
+                min_speech_duration_ms=200,
+                min_silence_duration_ms=300,
+                speech_pad_ms=300,
             )
+            kwargs = {
+                "beam_size": self._transcriber._beam_size,
+                "vad_filter": True,
+                "vad_parameters": vad_opts,
+            }
+            if self._language:
+                kwargs["language"] = self._language
 
-        while not self._stop_event.is_set():
-            try:
-                chunk, timestamp = self._audio_queue.get(timeout=0.3)
-            except queue.Empty:
-                continue
+            segs, info = self._transcriber._model.transcribe(audio, **kwargs)
+            detected_lang = getattr(info, "language", self._language or "")
 
-            if chunk is None:  # sentinel
-                break
+            for seg in segs:
+                if not seg.text.strip():
+                    continue
+                abs_s = self._buffer_start_time + seg.start
+                abs_e = self._buffer_start_time + seg.end
+                if abs_e <= self._last_processed_end + 0.05:
+                    continue
+                self._last_processed_end = max(self._last_processed_end, abs_e)
 
-            try:
-                result = self._vad.process_frame(chunk, timestamp)
-                if result is not None:
-                    audio_seg, start_t, end_t = result
-                    try:
-                        self._segment_queue.put_nowait((audio_seg, start_t, end_t))
-                    except queue.Full:
-                        pass
-            except Exception as e:
-                logger.error("VAD error: %s", e)
-
-    def _transcribe_worker(self):
-        """Worker: pull VAD segments, transcribe, push to result queue."""
-        while not self._stop_event.is_set():
-            try:
-                item = self._segment_queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
-
-            if item is None:  # sentinel
-                break
-
-            audio_seg, start_t, end_t = item
-            try:
-                text, detected = self._transcriber.transcribe_chunk(
-                    audio_seg, language=self._language,
+                seg_obj = LiveSegment(
+                    text=seg.text.strip(),
+                    start=abs_s, end=abs_e,
+                    language=self._language or detected_lang,
                 )
-
-                # Use user-specified language, or faster-whisper's detection
-                if self._language:
-                    lang = self._language
-                elif detected:
-                    lang = detected
-                    self._detected_language = detected  # track for display
-                elif not self._detected_language:
-                    # Fallback: heuristic guess (only if whisper gives nothing)
-                    self._detected_language = self._guess_language(text)
-                    lang = self._detected_language
-                else:
-                    lang = self._detected_language
-
-                if text.strip():
-                    segment = LiveSegment(
-                        text=text.strip(),
-                        start=start_t,
-                        end=end_t,
-                        language=lang,
-                    )
-                    try:
-                        self._result_queue.put_nowait(segment)
-                    except queue.Full:
-                        logger.debug("Result queue full, dropping.")
-            except Exception as e:
-                logger.error("Transcription error: %s", e)
+                try:
+                    self._result_queue.put_nowait(seg_obj)
+                except queue.Full:
+                    pass
+        except Exception as e:
+            logger.error("Window whisper error: %s", e)
 
     def _display_worker(self):
         """Worker: pull results, translate, update overlay."""
