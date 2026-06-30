@@ -2674,7 +2674,9 @@ def _start_live_cli(args: argparse.Namespace) -> None:
         if hasattr(args, 'translate_target') and args.translate_target:
             config.target_languages = [t.strip() for t in args.translate_target.split(",")]
 
-    config.overlay_enabled = True
+    # CLI mode: terminal-only by default, use --overlay for floating window
+    config.overlay_enabled = getattr(args, 'overlay', False)
+    config.tray_enabled = False
 
     print("TingShuo Live Mode")
     print("==================")
@@ -2685,7 +2687,10 @@ def _start_live_cli(args: argparse.Namespace) -> None:
         print(f"Translation: {config.target_languages}")
     print()
     print("Starting live capture... Press Ctrl+C to stop.")
-    print("A floating subtitle window will appear on your desktop.")
+    if config.overlay_enabled:
+        print("A floating subtitle window will appear on your desktop.")
+    else:
+        print("Subtitles will appear in this terminal.")
     print()
 
     session = LiveSession(config, on_log=lambda msg: print(f"  {msg}"))

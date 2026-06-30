@@ -1390,6 +1390,7 @@ class LiveSession:
         # State
         self._running = False
         self._stop_event = threading.Event()
+        self._audio_queue: queue.Queue = queue.Queue(maxsize=200)
         self._segment_queue: queue.Queue = queue.Queue(maxsize=50)
         self._result_queue: queue.Queue = queue.Queue(maxsize=100)
         self._language: Optional[str] = config.language
@@ -1420,14 +1421,8 @@ class LiveSession:
 
         # ── Initialize components ──
 
-        # VAD
-        self._vad = VoiceActivityDetector(
-            sample_rate=self.config.sample_rate,
-            threshold=self.config.vad_threshold,
-            silence_timeout=self.config.silence_timeout,
-            max_duration=self.config.max_segment_duration,
-            min_duration=self.config.min_segment_duration,
-        )
+        # VAD is lazily initialized in _audio_processor worker
+        # to avoid torch operations on the audio callback thread
 
         # Transcriber
         if self.config.engine_name == "vosk":
@@ -1490,6 +1485,15 @@ class LiveSession:
         t.start()
         self._worker_threads.append(t)
 
+        # ── Audio processor: VAD on dedicated thread (NOT on audio callback) ──
+        t = threading.Thread(
+            target=self._audio_processor,
+            name="ts-audio-proc",
+            daemon=True,
+        )
+        t.start()
+        self._worker_threads.append(t)
+
         # ── Start audio capture on main thread ──
         self._capture = AudioCapture(
             sample_rate=self.config.sample_rate,
@@ -1497,16 +1501,14 @@ class LiveSession:
         )
 
         def on_audio(chunk: np.ndarray):
+            """Audio callback — ONLY pushes raw frames. No processing here!"""
             if self._stop_event.is_set():
                 return
             timestamp = time.time() - self._session_start
-            result = self._vad.process_frame(chunk, timestamp)
-            if result is not None:
-                audio_seg, start_t, end_t = result
-                try:
-                    self._segment_queue.put_nowait((audio_seg, start_t, end_t))
-                except queue.Full:
-                    logger.debug("Segment queue full, dropping oldest segment.")
+            try:
+                self._audio_queue.put_nowait((chunk.copy(), timestamp))
+            except queue.Full:
+                pass  # drop oldest implicitly via maxsize
 
         self._capture.start(on_audio)
         self._on_log("🎤 Live capture active — listening for speech...")
@@ -1519,11 +1521,18 @@ class LiveSession:
         self._stop_event.set()
         self._running = False
 
-        # Stop capture
+        # Stop capture (stops pushing to _audio_queue)
         if self._capture:
             self._capture.stop()
 
-        # Flush VAD
+        # Signal audio processor to stop
+        try:
+            self._audio_queue.put_nowait((None, 0))  # sentinel
+        except queue.Full:
+            pass
+
+        # Flush VAD (runs on audio processor thread — wait a bit)
+        time.sleep(0.3)
         if self._vad:
             remaining = self._vad.flush()
             if remaining:
@@ -1553,6 +1562,39 @@ class LiveSession:
             self._tray.stop()
 
         self._on_log("Live session stopped.")
+
+    def _audio_processor(self):
+        """Worker: pull raw audio frames, run VAD, push speech segments.
+        Runs VAD (torch) on a dedicated thread, NOT the real-time audio callback."""
+        # Lazy-init VAD on this worker thread
+        if self._vad is None:
+            self._vad = VoiceActivityDetector(
+                sample_rate=self.config.sample_rate,
+                threshold=self.config.vad_threshold,
+                silence_timeout=self.config.silence_timeout,
+                max_duration=self.config.max_segment_duration,
+                min_duration=self.config.min_segment_duration,
+            )
+
+        while not self._stop_event.is_set():
+            try:
+                chunk, timestamp = self._audio_queue.get(timeout=0.3)
+            except queue.Empty:
+                continue
+
+            if chunk is None:  # sentinel
+                break
+
+            try:
+                result = self._vad.process_frame(chunk, timestamp)
+                if result is not None:
+                    audio_seg, start_t, end_t = result
+                    try:
+                        self._segment_queue.put_nowait((audio_seg, start_t, end_t))
+                    except queue.Full:
+                        pass
+            except Exception as e:
+                logger.error("VAD error: %s", e)
 
     def _transcribe_worker(self):
         """Worker: pull VAD segments, transcribe, push to result queue."""
