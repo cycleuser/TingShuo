@@ -44,6 +44,7 @@ import os
 import sys
 import re
 import json
+import time
 import wave
 import shutil
 import logging
@@ -781,7 +782,19 @@ _current_ui_lang = "en"
 def tr(key: str) -> str:
     """Get translated UI string for the current language."""
     lang_dict = UI_STRINGS.get(_current_ui_lang, UI_STRINGS["en"])
-    return lang_dict.get(key, UI_STRINGS["en"].get(key, key))
+    val = lang_dict.get(key)
+    if val is not None:
+        return val
+    # Fallback to LIVE_UI_STRINGS (defined in tingshuo_live.py)
+    try:
+        from tingshuo_live import LIVE_UI_STRINGS  # noqa: PLC0415
+        live_dict = LIVE_UI_STRINGS.get(_current_ui_lang, LIVE_UI_STRINGS.get("en", {}))
+        val = live_dict.get(key)
+        if val is not None:
+            return val
+    except ImportError:
+        pass
+    return UI_STRINGS["en"].get(key, key)
 
 
 def set_ui_language(lang: str) -> None:
@@ -2495,6 +2508,10 @@ def build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gui", action="store_true", help="Launch the graphical interface"
     )
+    parser.add_argument(
+        "--live", action="store_true",
+        help="Start live mode: capture system audio and show real-time subtitles",
+    )
 
     # Input/Output
     io_group = parser.add_argument_group("Input/Output")
@@ -2632,11 +2649,69 @@ def build_cli_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _start_live_cli(args: argparse.Namespace) -> None:
+    """Start live mode from CLI."""
+    try:
+        from tingshuo_live import LiveConfig, LiveSession
+    except ImportError as e:
+        logger.error(
+            "Live mode requires additional dependencies. "
+            "Install with: pip install sounddevice numpy torch"
+        )
+        sys.exit(1)
+
+    config = LiveConfig()
+    if args.engine:
+        config.engine_name = args.engine
+    if args.model:
+        config.model_name = args.model
+    lang = args.language
+    config.language = None if (not lang or lang.lower() == "auto") else lang
+
+    # Translation from CLI
+    if hasattr(args, 'translate') and args.translate:
+        config.translate_enabled = True
+        if hasattr(args, 'translate_target') and args.translate_target:
+            config.target_languages = [t.strip() for t in args.translate_target.split(",")]
+
+    config.overlay_enabled = True
+
+    print("TingShuo Live Mode")
+    print("==================")
+    print(f"Engine: {config.engine_name}")
+    print(f"Model: {config.model_name}")
+    print(f"Language: {config.language or 'auto-detect'}")
+    if config.translate_enabled:
+        print(f"Translation: {config.target_languages}")
+    print()
+    print("Starting live capture... Press Ctrl+C to stop.")
+    print("A floating subtitle window will appear on your desktop.")
+    print()
+
+    session = LiveSession(config, on_log=lambda msg: print(f"  {msg}"))
+
+    try:
+        session.start()
+        # Keep main thread alive
+        while session.is_running:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\nStopping...")
+    finally:
+        session.stop()
+    print("Live mode stopped.")
+
+
 def run_cli(args: argparse.Namespace) -> None:
     setup_logging(args.verbose)
 
     if args.gui:
         launch_gui()
+        return
+
+    # ── Early-exit: live mode ──
+    if args.live:
+        _start_live_cli(args)
         return
 
     # ── Early-exit: list Ollama models ──
@@ -3151,6 +3226,8 @@ def launch_gui() -> None:
             self.start_btn.pack(side=tk.LEFT, padx=4)
             self.stop_btn = ttk.Button(ctrl_frame, text=tr("stop"), command=self._stop, state="disabled")
             self.stop_btn.pack(side=tk.LEFT, padx=4)
+            self.live_btn = ttk.Button(ctrl_frame, text=tr("live_mode"), command=self._toggle_live)
+            self.live_btn.pack(side=tk.LEFT, padx=12)
 
             # ── Progress ──
             prog_frame = ttk.LabelFrame(main, text=tr("progress"), padding=6)
@@ -3235,6 +3312,11 @@ def launch_gui() -> None:
                         self.progress_label.config(
                             text=f"{tr('download_complete')} {success}/{total}"
                         )
+                    elif msg_type == "live_log":
+                        self._append_log(f"[LIVE] {data}")
+                    elif msg_type == "live_error":
+                        self._append_log(f"[ERROR] {tr('live_error')}: {data}")
+                        self._stop_live()
                     elif msg_type == "ollama_models":
                         model_list = data
                         self.ollama_refresh_btn.config(state="normal")
@@ -3567,6 +3649,79 @@ def launch_gui() -> None:
             self.stop_btn.config(state="disabled")
             self.progress_label.config(text=tr("stopping"))
 
+        # ── Live Mode ──
+
+        def _toggle_live(self) -> None:
+            if hasattr(self, '_live_session') and self._live_session is not None \
+               and self._live_session.is_running:
+                self._stop_live()
+            else:
+                self._start_live()
+
+        def _start_live(self) -> None:
+            try:
+                from tingshuo_live import LiveConfig, LiveSession
+            except ImportError as e:
+                messagebox.showerror(tr("error"), f"{tr('live_import_error')}: {e}")
+                return
+
+            config = LiveConfig()
+            config.engine_name = self.engine_var.get()
+            config.model_name = self.model_var.get()
+            lang_raw = self.lang_var.get().strip()
+            config.language = None if (not lang_raw or lang_raw.lower() == "auto") else lang_raw
+
+            # Translation settings
+            if self.trans_enabled_var.get():
+                config.translate_enabled = True
+                config.translate_method = self.trans_backend_var.get()
+                config.target_languages = [
+                    code for code, var in self.target_lang_vars.items() if var.get()
+                ]
+                config.nllb_model = self.nllb_model_var.get().strip() or "facebook/nllb-200-distilled-600M"
+                config.ollama_url = self.ollama_url_var.get().strip() or "http://localhost:11434"
+                config.ollama_model = self.ollama_model_var.get().strip() or "qwen2.5"
+                config.api_url = self.api_url_var.get().strip()
+                config.api_key = self.api_key_var.get().strip()
+                config.api_model = self.api_model_var.get().strip()
+
+            self._live_session = LiveSession(config, on_log=self._on_live_log)
+
+            # Disable batch controls during live mode
+            self.start_btn.config(state="disabled")
+            self.stop_btn.config(state="disabled")
+            self.live_btn.config(text=tr("stop_live"))
+            self.progress_label.config(text=tr("live_listening"))
+
+            # Clear log
+            self.log_text.config(state="normal")
+            self.log_text.delete("1.0", tk.END)
+            self.log_text.config(state="disabled")
+            self._append_log(f"[INFO] {tr('live_starting')}")
+
+            def worker():
+                try:
+                    self._live_session.start()
+                except Exception as e:
+                    self.msg_queue.put(("live_error", str(e)))
+
+            self.worker_thread = threading.Thread(target=worker, daemon=True)
+            self.worker_thread.start()
+
+        def _stop_live(self) -> None:
+            if hasattr(self, '_live_session') and self._live_session is not None:
+                self._live_session.stop()
+                self._live_session = None
+
+            self.live_btn.config(text=tr("live_mode"))
+            self.start_btn.config(state="normal")
+            self.stop_btn.config(state="disabled")
+            self.progress_label.config(text=tr("live_stopped"))
+            self._append_log(f"[INFO] {tr('live_stopped')}")
+
+        def _on_live_log(self, msg: str) -> None:
+            self.msg_queue.put(("live_log", msg))
+
     root = tk.Tk()
     TingShuoGUI(root)
     root.mainloop()
@@ -3581,6 +3736,13 @@ def main() -> None:
     # Quick check: if --gui is the only intent, launch GUI directly
     if "--gui" in sys.argv:
         launch_gui()
+        return
+
+    # Quick check: if --live, launch live mode directly
+    if "--live" in sys.argv:
+        parser = build_cli_parser()
+        args = parser.parse_args()
+        _start_live_cli(args)
         return
 
     parser = build_cli_parser()
