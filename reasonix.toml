@@ -1,0 +1,2 @@
+[permissions]
+allow = ["task", "Bash(cd /Users/fred/Documents/GitHub/cycleuser/TingShuo && git status --short)", "Bash(cd /Users/fred/Documents/GitHub/cycleuser/TingShuo && git diff --stat)"]
