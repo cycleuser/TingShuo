@@ -254,6 +254,7 @@ class LiveConfig:
     engine_name: str = "faster-whisper"    # "faster-whisper" or "vosk"
     model_name: str = "base"
     language: Optional[str] = None         # None = auto-detect
+    beam_size: int = 1                     # beam_size for faster-whisper (1=fast, 5=accurate)
 
     # Translation
     translate_enabled: bool = False
@@ -639,11 +640,12 @@ class FasterWhisperStreaming(StreamingTranscriber):
 
     name = "faster-whisper"
 
-    def __init__(self, model_name: str = "base"):
+    def __init__(self, model_name: str = "base", beam_size: int = 1):
         self.model_name = model_name
         self._model = None
         self._device = "auto"
         self._compute_type = "auto"
+        self._beam_size = beam_size
 
     def _load_model(self):
         if self._model is not None:
@@ -662,37 +664,19 @@ class FasterWhisperStreaming(StreamingTranscriber):
 
     def transcribe_chunk(self, audio: "np.ndarray",
                          language: Optional[str] = None) -> Tuple[str, str]:
-        """Transcribe audio chunk. Returns (text, detected_language)."""
+        """Transcribe audio chunk. Returns (text, detected_language).
+        Passes numpy array directly to faster-whisper — no temp file I/O."""
         self._load_model()
 
-        # Write audio to temp WAV
-        tmp_path = None
-        try:
-            fd, tmp_path = tempfile.mkstemp(suffix=".wav", prefix="tingshuo_live_")
-            os.close(fd)
+        # faster-whisper accepts numpy float32 array directly at 16kHz
+        kwargs = {"beam_size": self._beam_size}
+        if language:
+            kwargs["language"] = language
 
-            with wave.open(tmp_path, 'wb') as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(SAMPLE_RATE)
-                audio_int16 = (audio * 32767).clip(-32768, 32767).astype(np.int16)
-                wf.writeframes(audio_int16.tobytes())
-
-            kwargs = {"beam_size": 5}
-            if language:
-                kwargs["language"] = language
-
-            segments_gen, info = self._model.transcribe(tmp_path, **kwargs)
-            texts = [seg.text.strip() for seg in segments_gen if seg.text.strip()]
-            detected_lang = getattr(info, "language", language or "")
-            return " ".join(texts), detected_lang
-
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
+        segments_gen, info = self._model.transcribe(audio, **kwargs)
+        texts = [seg.text.strip() for seg in segments_gen if seg.text.strip()]
+        detected_lang = getattr(info, "language", language or "")
+        return " ".join(texts), detected_lang
 
     @classmethod
     def check_available(cls) -> bool:
@@ -1430,8 +1414,9 @@ class LiveSession:
         else:
             self._transcriber = FasterWhisperStreaming(
                 model_name=self.config.model_name,
+                beam_size=getattr(self.config, 'beam_size', 1),
             )
-        self._on_log(f"🔊 Engine: {self.config.engine_name} / {self.config.model_name}")
+        self._on_log(f"🔊 Engine: {self.config.engine_name} / {self.config.model_name} (beam={getattr(self.config, 'beam_size', 1)})")
         self._on_log(f"🌐 Language: {self.config.language or 'auto-detect'}")
 
         # Translator

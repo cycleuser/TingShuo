@@ -2677,11 +2677,12 @@ def _start_live_cli(args: argparse.Namespace) -> None:
     # CLI mode: terminal-only by default, use --overlay for floating window
     config.overlay_enabled = getattr(args, 'overlay', False)
     config.tray_enabled = False
+    config.beam_size = getattr(args, 'beam_size', 1)
 
     print("TingShuo Live Mode")
     print("==================")
     print(f"Engine: {config.engine_name}")
-    print(f"Model: {config.model_name}")
+    print(f"Model: {config.model_name} (beam={config.beam_size})")
     print(f"Language: {config.language or 'auto-detect'}")
     if config.translate_enabled:
         print(f"Translation: {config.target_languages}")
