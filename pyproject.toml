@@ -36,6 +36,7 @@ whisper = ["openai-whisper>=20231117"]
 whisper-cpp = ["pywhispercpp>=1.0.0"]
 nlp = ["nltk>=3.8"]
 translation = ["transformers>=4.30.0", "sentencepiece>=0.1.99"]
+live = ["sounddevice>=0.4.6", "numpy>=1.20.0", "torch>=1.10.0", "pystray>=0.19.0", "Pillow>=8.0.0"]
 all = [
     "faster-whisper>=1.0.0",
     "vosk>=0.3.45",
@@ -44,6 +45,11 @@ all = [
     "nltk>=3.8",
     "transformers>=4.30.0",
     "sentencepiece>=0.1.99",
+    "sounddevice>=0.4.6",
+    "numpy>=1.20.0",
+    "torch>=1.10.0",
+    "pystray>=0.19.0",
+    "Pillow>=8.0.0",
 ]
 
 [project.urls]
@@ -55,7 +61,7 @@ Issues = "https://github.com/cycleuser/TingShuo/issues"
 tingshuo = "tingshuo:main"
 
 [tool.setuptools]
-py-modules = ["tingshuo"]
+py-modules = ["tingshuo", "tingshuo_live"]
 
 [tool.setuptools.dynamic]
 version = {attr = "tingshuo.__version__"}
