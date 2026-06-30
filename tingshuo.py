@@ -2691,14 +2691,30 @@ def _start_live_cli(args: argparse.Namespace) -> None:
     session = LiveSession(config, on_log=lambda msg: print(f"  {msg}"))
 
     # Prepare overlay on main thread before starting capture
+    overlay = None
     if config.overlay_enabled:
-        session.prepare_overlay()
+        overlay = session.prepare_overlay()
+
+    # Run capture in background thread so main thread can run tk mainloop
+    import threading
+
+    def _run_capture():
+        try:
+            session.start()
+        except Exception as e:
+            print(f"  Capture error: {e}")
+
+    capture_thread = threading.Thread(target=_run_capture, daemon=True)
+    capture_thread.start()
 
     try:
-        session.start()
-        # Keep main thread alive
-        while session.is_running:
-            time.sleep(0.5)
+        if overlay and overlay._root:
+            # Run tkinter mainloop on main thread (required for overlay events)
+            overlay._root.mainloop()
+        else:
+            # No overlay: just poll until stopped
+            while session.is_running:
+                time.sleep(0.5)
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:

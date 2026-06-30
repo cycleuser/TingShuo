@@ -1079,6 +1079,9 @@ class SubtitleOverlay:
         self._menu.add_command(label="Exit Live Mode", command=self._exit_live)
         self._root.bind("<Button-3>", lambda e: self._menu.post(e.x_root, e.y_root))
 
+        # Virtual event for cross-thread subtitle updates
+        self._root.bind('<<SubtitleUpdate>>', self._on_subtitle_event)
+
         self._root.withdraw()  # hidden until first subtitle
         self._visible = False
 
@@ -1109,12 +1112,36 @@ class SubtitleOverlay:
 
     def update_subtitle(self, text: str, translation: str = "",
                         language: str = "", is_partial: bool = False):
-        """Update the displayed subtitle text."""
-        if not self._started:
+        """Update the displayed subtitle text. Thread-safe — uses
+        event_generate for cross-thread delivery without needing mainloop."""
+        if not self._started or not self._root:
             return
+        try:
+            self._root.event_generate(
+                '<<SubtitleUpdate>>',
+                data=json.dumps({
+                    'text': text, 'translation': translation,
+                    'language': language, 'is_partial': is_partial,
+                }),
+                when='tail',
+            )
+        except Exception:
+            # Fallback: direct update (works on macOS/Linux from bg threads)
+            try:
+                self._do_update(text, translation, language, is_partial)
+            except Exception:
+                pass
 
-        self._root.after(0, lambda: self._do_update(text, translation,
-                                                     language, is_partial))
+    def _on_subtitle_event(self, event):
+        """Handle <<SubtitleUpdate>> virtual event."""
+        try:
+            data = json.loads(event.data)
+            self._do_update(
+                data.get('text', ''), data.get('translation', ''),
+                data.get('language', ''), data.get('is_partial', False),
+            )
+        except Exception:
+            pass
 
     def _do_update(self, text: str, translation: str,
                    language: str, is_partial: bool):
