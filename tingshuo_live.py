@@ -357,9 +357,12 @@ class AudioCapture:
     def find_loopback_device() -> Optional[int]:
         """Auto-detect the best loopback device. Returns device index or None."""
         devices = AudioCapture.list_devices()
-        # Preference: explicit loopback > WASAPI input > PulseAudio monitor > first input
+        # Preference: explicit loopback > BlackHole > WASAPI input > PulseAudio monitor > first input
         for dev in devices:
             if "loopback" in dev['name'].lower():
+                return dev['index']
+        for dev in devices:
+            if "blackhole" in dev['name'].lower():
                 return dev['index']
         for dev in devices:
             if dev['hostapi'] and "wasapi" in dev['hostapi'].lower() \
@@ -1240,10 +1243,10 @@ class SystemTrayController:
         menu = Menu(
             MenuItem("🎤 Start Capture", self._on_start, enabled=True),
             MenuItem("⏹ Stop Capture", self._on_stop, enabled=False),
-            MenuItem.SEPARATOR,
+            Menu.SEPARATOR,
             MenuItem("📺 Show Overlay", self._on_show_overlay),
             MenuItem("📺 Hide Overlay", self._on_hide_overlay),
-            MenuItem.SEPARATOR,
+            Menu.SEPARATOR,
             MenuItem("Language ▼", Menu(
                 MenuItem("Auto-detect", lambda: self._on_lang(None)),
                 MenuItem("English", lambda: self._on_lang("en")),
@@ -1267,7 +1270,7 @@ class SystemTrayController:
                     ("es", "→ Español"),
                 ]],
             )),
-            MenuItem.SEPARATOR,
+            Menu.SEPARATOR,
             MenuItem("❌ Exit", self._on_exit),
         )
 
@@ -1357,15 +1360,26 @@ class LiveSession:
         self._session_start: float = 0.0
         self._worker_threads: List[threading.Thread] = []
 
+    def prepare_overlay(self):
+        """Create the overlay window on the calling thread (must be main/GUI thread).
+        Call this before start() when overlay is enabled."""
+        if not self.config.overlay_enabled or self._overlay is not None:
+            return
+        self._overlay = SubtitleOverlay(self.config)
+        self._overlay.set_exit_callback(self.stop)
+        self._overlay.start()
+        return self._overlay
+
     def start(self):
-        """Start the live session."""
+        """Start the live session. Call prepare_overlay() first on the main thread
+        if overlay is enabled."""
         if self._running:
             return
         self._running = True
         self._stop_event.clear()
         self._session_start = time.time()
 
-        self._on_log("Starting live session...")
+        self._on_log("🚀 Starting live session...")
 
         # ── Initialize components ──
 
@@ -1385,17 +1399,22 @@ class LiveSession:
             self._transcriber = FasterWhisperStreaming(
                 model_name=self.config.model_name,
             )
+        self._on_log(f"🔊 Engine: {self.config.engine_name} / {self.config.model_name}")
+        self._on_log(f"🌐 Language: {self.config.language or 'auto-detect'}")
 
         # Translator
         if self.config.translate_enabled and self.config.target_languages:
             self._translator = LiveTranslator(self.config)
+            self._on_log(f"📝 Translation: → {', '.join(self.config.target_languages)}")
 
-        # Overlay
+        # Overlay — must be pre-created on main thread via prepare_overlay()
         if self.config.overlay_enabled:
-            self._overlay = SubtitleOverlay(self.config)
-            self._overlay.set_exit_callback(self.stop)
-            # Must start overlay on main thread - defer to caller via callback
-            self._overlay.start()
+            if self._overlay is None:
+                # Create now if caller forgot to call prepare_overlay()
+                self._overlay = SubtitleOverlay(self.config)
+                self._overlay.set_exit_callback(self.stop)
+                self._overlay.start()
+            self._on_log("📺 Overlay window ready")
 
         # System tray
         if self.config.tray_enabled:
@@ -1434,7 +1453,7 @@ class LiveSession:
         t.start()
         self._worker_threads.append(t)
 
-        # ── Start audio capture (blocks its own thread) ──
+        # ── Start audio capture on main thread ──
         self._capture = AudioCapture(
             sample_rate=self.config.sample_rate,
             device=self.config.capture_device,
@@ -1453,7 +1472,7 @@ class LiveSession:
                     logger.debug("Segment queue full, dropping oldest segment.")
 
         self._capture.start(on_audio)
-        self._on_log("Live capture started. Listening...")
+        self._on_log("🎤 Live capture active — listening for speech...")
 
     def stop(self):
         """Stop the live session gracefully."""
@@ -1569,11 +1588,15 @@ class LiveSession:
                     is_partial=False,
                 )
 
-            # Log
-            lang = segment.language or "?"
-            log_line = f"[{lang}] {segment.text}"
+            # Log to terminal with clear formatting
+            lang_name = LANG_NAMES.get(segment.language, segment.language or "??")
+            timestamp = f"{segment.start:5.1f}s"
+            log_line = f"🎤 [{lang_name}] {segment.text}"
             if translation:
-                log_line += f"  → {translation}"
+                tgt_name = LANG_NAMES.get(
+                    self.config.target_languages[0] if self.config.target_languages else "",
+                    self.config.target_languages[0] if self.config.target_languages else "")
+                log_line += f"\n📝 [{tgt_name}] {translation}"
             self._on_log(log_line)
 
     def set_language(self, language: Optional[str]):
