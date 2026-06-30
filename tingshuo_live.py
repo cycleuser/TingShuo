@@ -983,14 +983,24 @@ class SubtitleOverlay:
         self._started = False
 
     def start(self):
-        """Create and show the overlay window."""
+        """Create and show the overlay window. Returns True on success."""
         if self._started:
-            return
+            return True
         self._started = True
 
-        import tkinter as tk
+        try:
+            import tkinter as tk
+        except ImportError:
+            self._started = False
+            return False
 
-        self._root = tk.Toplevel()
+        try:
+            self._root = tk.Toplevel()
+        except Exception as e:
+            logger.warning("Cannot create overlay window (headless?): %s", e)
+            self._root = None
+            self._started = False
+            return False
         self._root.title("TingShuo Live Subtitles")
         self._root.overrideredirect(True)           # frameless
         self._root.wm_attributes("-topmost", True)   # always on top
