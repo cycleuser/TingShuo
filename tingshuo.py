@@ -2690,6 +2690,10 @@ def _start_live_cli(args: argparse.Namespace) -> None:
 
     session = LiveSession(config, on_log=lambda msg: print(f"  {msg}"))
 
+    # Prepare overlay on main thread before starting capture
+    if config.overlay_enabled:
+        session.prepare_overlay()
+
     try:
         session.start()
         # Keep main thread alive
@@ -3686,6 +3690,14 @@ def launch_gui() -> None:
                 config.api_model = self.api_model_var.get().strip()
 
             self._live_session = LiveSession(config, on_log=self._on_live_log)
+
+            # Prepare overlay on main thread BEFORE starting worker
+            # (tkinter Toplevel must be created on the main/GUI thread)
+            if config.overlay_enabled:
+                try:
+                    self._live_session.prepare_overlay()
+                except Exception as e:
+                    self._append_log(f"[WARN] Overlay init failed: {e}")
 
             # Disable batch controls during live mode
             self.start_btn.config(state="disabled")
